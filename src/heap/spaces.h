@@ -188,10 +188,13 @@ class FreeListCategory {
 
   void set_free_list(FreeList* free_list) { free_list_ = free_list; }
 
-#ifdef DEBUG
+  static size_t SumAllFreeLists(FreeListCategory* free_list);
+  static int AllFreeListsLength(FreeListCategory* free_list);
+
+  //#ifdef DEBUG
   size_t SumFreeList();
   int FreeListLength();
-#endif
+  //#endif
 
  private:
   // For debug builds we accurately compute free lists lengths up until
@@ -1891,6 +1894,8 @@ class FreeList {
   // Returns a page containing an entry for a given type, or nullptr otherwise.
   inline Page* GetPageForCategoryType(FreeListCategoryType type);
 
+  void PrintFreeLists();
+
 #ifdef DEBUG
   size_t SumFreeLists();
   bool IsVeryLong();
@@ -1922,11 +1927,11 @@ class FreeList {
   // padding and alignment of data and code pages into account.
   static const size_t kMaxBlockSize = Page::kPageSize;
 
-  static const size_t kTiniestListMax = 0xa * kTaggedSize;
-  static const size_t kTinyListMax = 0x1f * kTaggedSize;
-  static const size_t kSmallListMax = 0xff * kTaggedSize;
-  static const size_t kMediumListMax = 0x7ff * kTaggedSize;
-  static const size_t kLargeListMax = 0x1fff * kTaggedSize;
+  static const size_t kTiniestListMax = 0xa * kTaggedSize;  //   10 * sizeof(void*)
+  static const size_t kTinyListMax = 0x1f * kTaggedSize;    //   31 * sizeof(void*)
+  static const size_t kSmallListMax = 0xff * kTaggedSize;   //  255 * sizeof(void*)
+  static const size_t kMediumListMax = 0x7ff * kTaggedSize; // 2047 * sizeof(void*)
+  static const size_t kLargeListMax = 0x1fff * kTaggedSize; // 8191 * sizeof(void*)
   static const size_t kTinyAllocationMax = kTiniestListMax;
   static const size_t kSmallAllocationMax = kTinyListMax;
   static const size_t kMediumAllocationMax = kSmallListMax;

@@ -457,6 +457,26 @@ void Heap::PrintShortHeapStatistics() {
                total_gc_time_ms_);
 }
 
+void Heap::PrintPagesStatistics() {
+  Page* page = static_cast<Page*>(old_space_->first_page());
+  unsigned int pageCnt = 0;
+  while (page) {
+
+    PrintIsolate(isolate_, "Page %u: ", pageCnt);
+
+    for (int cat = kFirstCategory; cat != kLastCategory+1; cat++) {
+      FreeListCategory* free_list =
+          page->free_list_category(static_cast<FreeListCategoryType>(cat));
+      base::OS::Print("[%d: %5d || %5zu], ",
+                      cat, free_list->FreeListLength(), free_list->SumFreeList());
+    }
+    base::OS::Print("\n");
+
+    page = page->next_page();
+    pageCnt++;
+  }
+}
+
 void Heap::DumpJSONHeapStatistics(std::stringstream& stream) {
   HeapStatistics stats;
   reinterpret_cast<v8::Isolate*>(isolate())->GetHeapStatistics(&stats);

@@ -759,7 +759,13 @@ DEFINE_BOOL(trace_idle_notification_verbose, false,
 DEFINE_BOOL(trace_gc_verbose, false,
             "print more details following each garbage collection")
 DEFINE_IMPLICATION(trace_gc_verbose, trace_gc)
-
+DEFINE_BOOL(trace_gc_alloc_sizes, false,
+            "prints the size of each allocation in freelists")
+DEFINE_BOOL(trace_gc_pages_stats, false,
+            "prints statistics of the pages usage")
+DEFINE_BOOL(trace_gc_fl_alloc_fail, false,
+            "prints freelists sizes when FreeList::Allocate fails")
+    
 DEFINE_INT(trace_allocation_stack_interval, -1,
            "print stack trace after <n> free-list allocations")
 DEFINE_INT(trace_duplicate_threshold_kb, 0,

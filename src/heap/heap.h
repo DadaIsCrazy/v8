@@ -481,6 +481,9 @@ class Heap {
   // Print short heap statistics.
   void PrintShortHeapStatistics();
 
+  // Print pages usage statistics.
+  void PrintPagesStatistics();
+
   // Dump heap statistics in JSON format.
   void DumpJSONHeapStatistics(std::stringstream& stream);
 

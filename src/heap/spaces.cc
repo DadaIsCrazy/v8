@@ -3092,13 +3092,25 @@ FreeSpace FreeList::SearchForNodeInList(FreeListCategoryType type,
 
 FreeSpace FreeList::Allocate(size_t size_in_bytes, size_t* node_size) {
   DCHECK_GE(kMaxBlockSize, size_in_bytes);
+
+
+  FreeListCategory* flTiny1 = categories_[1];
+  int length1 = FreeListCategory::AllFreeListsLength(flTiny1);
+  size_t sum1 = FreeListCategory::SumAllFreeLists(flTiny1);
+
   FreeSpace node;
   // First try the allocation fast path: try to allocate the minimum element
   // size of a free list category. This operation is constant time.
   FreeListCategoryType type =
       SelectFastAllocationFreeListCategoryType(size_in_bytes);
+  FreeListCategoryType type1 = type;
   for (int i = type; i < kHuge && node.is_null(); i++) {
     node = FindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                      node_size);
+  }
+
+  if (length1 == 1 && sum1 >= size_in_bytes && node.is_null()) {
+    FindNodeIn(static_cast<FreeListCategoryType>(type), size_in_bytes,
                       node_size);
   }
 
@@ -3117,6 +3129,33 @@ FreeSpace FreeList::Allocate(size_t size_in_bytes, size_t* node_size) {
 
   if (!node.is_null()) {
     Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+  }
+
+  if (FLAG_trace_gc_alloc_sizes) {
+    if (!node.is_null()) {
+      // TODO: no better way to find isolate?
+      PrintIsolate(Page::FromHeapObject(node)->heap()->isolate(),
+                   "Allocate(%zu) = %zu\n", size_in_bytes, *node_size);
+    } else {
+      // TODO: find isolate to print to?
+      printf("Allocate(%zu) = %zu (null)\n", size_in_bytes, *node_size);
+    }
+  }
+
+  if (FLAG_trace_gc_fl_alloc_fail && node.is_null()) {
+    printf("Allocate(%zu)  =====> null\n", size_in_bytes);
+    PrintFreeLists();
+    FreeListCategory* flTiny = categories_[1];
+    int length = FreeListCategory::AllFreeListsLength(flTiny);
+    size_t sum = FreeListCategory::SumAllFreeLists(flTiny);
+
+    if (length == 1 && sum >= size_in_bytes) {
+      printf("Here it's weird\n");
+      printf("%d %d %zu\n", type1, length1, sum1);
+    }
+
+    fflush(stdout);
+
   }
 
   DCHECK(IsVeryLong() || Available() == SumFreeLists());
@@ -3198,7 +3237,39 @@ void FreeList::PrintCategories(FreeListCategoryType type) {
 }
 
 
-#ifdef DEBUG
+size_t FreeListCategory::SumAllFreeLists(FreeListCategory* free_list) {
+  size_t sum = 0;
+  while (free_list) {
+    sum += free_list->SumFreeList();
+    free_list = free_list->next_;
+  }
+  return sum;
+}
+
+int FreeListCategory::AllFreeListsLength(FreeListCategory* free_list) {
+  int length = 0;
+  while (free_list) {
+    length += free_list->FreeListLength();
+    free_list = free_list->next_;
+  }
+  return length;
+}
+
+void FreeList::PrintFreeLists() {
+
+  for (int cat = kFirstCategory; cat != kLastCategory+1; cat++) {
+    FreeListCategory* free_list =
+        categories_[static_cast<FreeListCategoryType>(cat)];
+
+    printf("[%d: %5d || %5zu], ",
+           cat, FreeListCategory::AllFreeListsLength(free_list),
+           FreeListCategory::SumAllFreeLists(free_list));
+  }
+  printf("\n");
+}
+
+
+//#ifdef DEBUG
 size_t FreeListCategory::SumFreeList() {
   size_t sum = 0;
   FreeSpace cur = top();
@@ -3223,6 +3294,8 @@ int FreeListCategory::FreeListLength() {
   }
   return length;
 }
+
+#ifdef DEBUG
 
 bool FreeList::IsVeryLong() {
   int len = 0;
