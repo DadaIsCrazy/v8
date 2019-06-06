@@ -3133,21 +3133,23 @@ FreeSpace FreeList::Allocate(size_t size_in_bytes, size_t* node_size) {
   }
 
   if (node.is_null() && type != kHuge) {
-    // We didn't find anything in the huge list. Now search the best fitting
-    // free list for a node that has at least the requested size.
+    // We didn't find anything in the huge list.
     type = SelectFreeListCategoryType(size_in_bytes);
-    node = TryFindNodeIn(type, size_in_bytes, node_size);
-  }
 
-  bool went_in = false;
-  if (node.is_null() && type == kTiniest) {
-    // For this tiniest object, all lists but the tiny one were searched.
-    // Now trying the tiny list.
-    if (FLAG_trace_gc_fl_alloc_fail) {
-      printf("searching in Tiny...\n");
+    if (type == kTiniest) {
+      // For this tiniest object, the tiny list hasn't been searched yet.
+      // Now searching the tiny list.
+      node = TryFindNodeIn(kTiny, size_in_bytes, node_size);
+      if (FLAG_trace_gc_fl_alloc_fail) {
+        printf("searching in Tiny...\n");
+      }
     }
-    node = TryFindNodeIn(kTiny, size_in_bytes, node_size);
-    went_in = true;
+
+    if (node.is_null()) {
+      // Now search the best fitting free list for a node that has at least the
+      // requested size.
+      node = TryFindNodeIn(type, size_in_bytes, node_size);
+    }
   }
 
   if (!node.is_null()) {

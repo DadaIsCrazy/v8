@@ -1998,6 +1998,7 @@ class FreeList {
   FreeListCategory* categories_[kNumberOfCategories];
 
   friend class FreeListCategory;
+  friend class heap::HeapTester;
 };
 
 // LocalAllocationBuffer represents a linear allocation area that is created

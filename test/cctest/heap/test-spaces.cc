@@ -741,7 +741,7 @@ TEST(ShrinkPageToHighWaterMarkTwoWordFiller) {
   CHECK_EQ(0u, shrunk);
 }
 
-TEST(AllocateObjTinyFreeList) {
+HEAP_TEST(AllocateObjTinyFreeList) {
   CcTest::InitializeVM();
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
@@ -749,17 +749,19 @@ TEST(AllocateObjTinyFreeList) {
   heap::SealCurrentObjects(CcTest::heap());
 
   // tinyObjPage will contain the page that contains the tiny object.
-  Page* tinyObjPage;
+  Page* tiny_obj_page;
   {
     // Allocates a tiny object (ie, that fits in the Tiny freelist).
     // It will go at the begining of a page.
     // Note that the handlescope is locally scoped.
     {
-      HandleScope tinyScope(isolate);
-      Handle<FixedArray> tinyObj =
-          isolate->factory()->NewFixedArray(0x15, AllocationType::kOld);
+      HandleScope tiny_scope(isolate);
+      size_t tiny_obj_size =
+          (FreeList::kTinyListMax - FixedArray::kHeaderSize) / kTaggedSize;
+      Handle<FixedArray> tiny_obj = isolate->factory()->NewFixedArray(
+          static_cast<int>(tiny_obj_size), AllocationType::kOld);
       // Remember the page of this tiny object.
-      tinyObjPage = Page::FromHeapObject(*tinyObj);
+      tiny_obj_page = Page::FromHeapObject(*tiny_obj);
     }
 
     // Fill up the page entirely.
@@ -772,7 +774,7 @@ TEST(AllocateObjTinyFreeList) {
 
     // Checking that the new objects were indeed allocated on the same page
     // as the tiny one.
-    CHECK_EQ(tinyObjPage, Page::FromHeapObject(*(handles.back())));
+    CHECK_EQ(tiny_obj_page, Page::FromHeapObject(*(handles.back())));
   }
 
   // Call gc to reclain tinyObj (since its HandleScope went out of scope).
@@ -782,12 +784,14 @@ TEST(AllocateObjTinyFreeList) {
 
   // Now allocate a tyniest object.
   // It should go at the same place as the previous one.
-  Handle<FixedArray> tiniestObj =
-      isolate->factory()->NewFixedArray(0x4, AllocationType::kOld);
+  size_t tiniest_obj_size =
+      (FreeList::kTiniestListMax - FixedArray::kHeaderSize) / kTaggedSize;
+  Handle<FixedArray> tiniest_obj = isolate->factory()->NewFixedArray(
+      static_cast<int>(tiniest_obj_size), AllocationType::kOld);
 
   // Check that the new tiny object is in the same page as the previous one.
-  Page* tiniestObjPage = Page::FromHeapObject(*tiniestObj);
-  CHECK_EQ(tinyObjPage, tiniestObjPage);
+  Page* tiniest_obj_page = Page::FromHeapObject(*tiniest_obj);
+  CHECK_EQ(tiny_obj_page, tiniest_obj_page);
 }
 
 }  // namespace heap
