@@ -830,6 +830,7 @@
   # to GC.
   'compiler/native-context-specialization-hole-check': [SKIP],
   'regress/regress-trap-allocation-memento': [SKIP],
+  'regress/regress-v8-9267-*': [SKIP],
   'shared-function-tier-up-turbo': [SKIP],
 }],  # 'gc_fuzzer'
 
@@ -894,6 +895,12 @@
   'big-array-literal': [SKIP],
   'regress/regress-353551': [SKIP],
 }],  # 'arch == ppc64'
+
+##############################################################################
+['system == aix', {
+  # stack overflow
+  'regress/regress-crbug-178790': [PASS, ['mode == debug', SKIP]],
+}],  # 'system == aix'
 
 ##############################################################################
 ['arch == s390x', {

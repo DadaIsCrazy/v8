@@ -741,6 +741,55 @@ TEST(ShrinkPageToHighWaterMarkTwoWordFiller) {
   CHECK_EQ(0u, shrunk);
 }
 
+TEST(AllocateObjTinyFreeList) {
+  CcTest::InitializeVM();
+  Isolate* isolate = CcTest::i_isolate();
+  HandleScope scope(isolate);
+
+  heap::SealCurrentObjects(CcTest::heap());
+
+  // tinyObjPage will contain the page that contains the tiny object.
+  Page* tinyObjPage;
+  {
+    // Allocates a tiny object (ie, that fits in the Tiny freelist).
+    // It will go at the begining of a page.
+    // Note that the handlescope is locally scoped.
+    {
+      HandleScope tinyScope(isolate);
+      Handle<FixedArray> tinyObj =
+          isolate->factory()->NewFixedArray(0x15, AllocationType::kOld);
+      // Remember the page of this tiny object.
+      tinyObjPage = Page::FromHeapObject(*tinyObj);
+    }
+
+    // Fill up the page entirely.
+    PagedSpace* old_space = CcTest::heap()->old_space();
+    int space_remaining =
+        static_cast<int>(*old_space->allocation_limit_address() -
+                         *old_space->allocation_top_address());
+    std::vector<Handle<FixedArray>> handles = heap::CreatePadding(
+        old_space->heap(), space_remaining, AllocationType::kOld);
+
+    // Checking that the new objects were indeed allocated on the same page
+    // as the tiny one.
+    CHECK_EQ(tinyObjPage, Page::FromHeapObject(*(handles.back())));
+  }
+
+  // Call gc to reclain tinyObj (since its HandleScope went out of scope).
+  CcTest::CollectAllGarbage();
+  isolate->heap()->mark_compact_collector()->EnsureSweepingCompleted();
+  isolate->heap()->old_space()->FreeLinearAllocationArea();
+
+  // Now allocate a tyniest object.
+  // It should go at the same place as the previous one.
+  Handle<FixedArray> tiniestObj =
+      isolate->factory()->NewFixedArray(0x4, AllocationType::kOld);
+
+  // Check that the new tiny object is in the same page as the previous one.
+  Page* tiniestObjPage = Page::FromHeapObject(*tiniestObj);
+  CHECK_EQ(tinyObjPage, tiniestObjPage);
+}
+
 }  // namespace heap
 }  // namespace internal
 }  // namespace v8

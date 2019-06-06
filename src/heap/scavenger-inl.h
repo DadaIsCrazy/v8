@@ -97,8 +97,7 @@ void Scavenger::PageMemoryFence(MaybeObject object) {
   // with  page initialization.
   HeapObject heap_object;
   if (object->GetHeapObject(&heap_object)) {
-    MemoryChunk* chunk = MemoryChunk::FromAddress(heap_object.address());
-    CHECK_NOT_NULL(chunk->synchronized_heap());
+    MemoryChunk::FromHeapObject(heap_object)->SynchronizedHeapLoad();
   }
 #endif
 }
@@ -215,7 +214,7 @@ bool Scavenger::HandleLargeObject(Map map, HeapObject object, int object_size,
           FLAG_young_generation_large_objects &&
           MemoryChunk::FromHeapObject(object)->InNewLargeObjectSpace())) {
     DCHECK_EQ(NEW_LO_SPACE,
-              MemoryChunk::FromHeapObject(object)->owner()->identity());
+              MemoryChunk::FromHeapObject(object)->owner_identity());
     if (object.map_slot().Release_CompareAndSwap(
             map, MapWord::FromForwardingAddress(object).ToMap()) == map) {
       surviving_new_large_objects_.insert({object, map});
