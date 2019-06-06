@@ -3114,6 +3114,12 @@ FreeSpace FreeList::Allocate(size_t size_in_bytes, size_t* node_size) {
     node = TryFindNodeIn(type, size_in_bytes, node_size);
   }
 
+  if (node.is_null() && type == kTiniest) {
+    // For this tiniest object, all lists but the tiny one were searched.
+    // Now trying the tiny list.
+    node = TryFindNodeIn(kTiny, size_in_bytes, node_size);
+  }
+
   if (!node.is_null()) {
     Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
   }
