@@ -845,6 +845,7 @@ class MemoryChunk {
   friend class MinorMarkingState;
   friend class MinorNonAtomicMarkingState;
   friend class PagedSpace;
+  friend class heap::HeapTester;
 };
 
 STATIC_ASSERT(sizeof(std::atomic<intptr_t>) == kSystemPointerSize);

@@ -2937,7 +2937,8 @@ FreeSpace FreeListCategory::PickNodeFromList(size_t minimum_size,
   if (FLAG_trace_gc_fl_alloc_fail) {
     printf("FreeListCategory::PickNodeFromList(%zu). Top size = %d.\n", minimum_size, node.is_null() ? -1 : node.Size());
   }
-  if (node.is_null() || static_cast<size_t>(node.Size()) < minimum_size) {
+  DCHECK(!node.is_null());
+  if (static_cast<size_t>(node.Size()) < minimum_size) {
     *node_size = 0;
     return FreeSpace();
   }
@@ -3056,9 +3057,11 @@ FreeSpace FreeList::FindNodeIn(FreeListCategoryType type, size_t minimum_size,
     node = current->PickNodeFromList(minimum_size, node_size);
     if (!node.is_null()) {
       DCHECK(IsVeryLong() || Available() == SumFreeLists());
+      if (current->is_empty()) {
+        RemoveCategory(current);
+      }
       return node;
     }
-    RemoveCategory(current);
   }
   return node;
 }
@@ -3077,6 +3080,9 @@ FreeSpace FreeList::TryFindNodeIn(FreeListCategoryType type,
   if (!node.is_null()) {
     DCHECK(IsVeryLong() || Available() == SumFreeLists());
   }
+  if (categories_[type]->is_empty()) {
+    RemoveCategory(categories_[type]);
+  }
   return node;
 }
 
@@ -3090,10 +3096,10 @@ FreeSpace FreeList::SearchForNodeInList(FreeListCategoryType type,
     node = current->SearchForNodeInList(minimum_size, node_size);
     if (!node.is_null()) {
       DCHECK(IsVeryLong() || Available() == SumFreeLists());
+      if (current->is_empty()) {
+        RemoveCategory(current);
+      }
       return node;
-    }
-    if (current->is_empty()) {
-      RemoveCategory(current);
     }
   }
   return node;
@@ -3101,10 +3107,6 @@ FreeSpace FreeList::SearchForNodeInList(FreeListCategoryType type,
 
 FreeSpace FreeList::Allocate(size_t size_in_bytes, size_t* node_size) {
   DCHECK_GE(kMaxBlockSize, size_in_bytes);
-
-  if (FLAG_trace_gc_fl_alloc_fail) {
-    printf("FreeList::Allocate(%zu)\n", size_in_bytes);
-  }
 
   FreeListCategory* flTiny1 = categories_[1];
   int length1 = FreeListCategory::AllFreeListsLength(flTiny1);
