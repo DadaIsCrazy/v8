@@ -3068,20 +3068,20 @@ FreeSpace FreeList::FindNodeIn(FreeListCategoryType type, size_t minimum_size,
 
 FreeSpace FreeList::TryFindNodeIn(FreeListCategoryType type,
                                   size_t minimum_size, size_t* node_size) {
+  FreeListCategory* category = categories_[type];
   if (FLAG_trace_gc_fl_alloc_fail) {
     printf("FreeList::TryFindNodeIn(cat=%d,size=%zu)\n", type, minimum_size);
-    if (categories_[type] == nullptr) {
+    if (category == nullptr) {
       printf("FreeList::TryFindNodeIn  ==> categories_[%d] == nullptr\n", type);
     }
   }
-
-  if (categories_[type] == nullptr) return FreeSpace();
-  FreeSpace node = categories_[type]->PickNodeFromList(minimum_size, node_size);
+  if (category == nullptr) return FreeSpace();
+  FreeSpace node = category->PickNodeFromList(minimum_size, node_size);
   if (!node.is_null()) {
     DCHECK(IsVeryLong() || Available() == SumFreeLists());
   }
-  if (categories_[type]->is_empty()) {
-    RemoveCategory(categories_[type]);
+  if (category->is_empty()) {
+    RemoveCategory(category);
   }
   return node;
 }

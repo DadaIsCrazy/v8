@@ -801,7 +801,9 @@ HEAP_TEST(EmptyFreeListCategoriesRemoved) {
 
   heap::SealCurrentObjects(CcTest::heap());
 
-  size_t tiny_obj_size =
+  // The maximum size for a Tiny FixedArray.
+  // (there is no specific reason for using Tiny rather than any other category)
+  constexpr size_t tiny_obj_size =
       (FreeList::kTinyListMax - FixedArray::kHeaderSize) / kTaggedSize;
 
   Page* tiny_obj_page;
@@ -826,15 +828,13 @@ HEAP_TEST(EmptyFreeListCategoriesRemoved) {
   isolate->heap()->mark_compact_collector()->EnsureSweepingCompleted();
   isolate->heap()->old_space()->FreeLinearAllocationArea();
 
-  printf("++++++++ Gonna allocate last one +++++++\n");
-
   // Allocates a new tiny_obj, which should take the place of the old one.
   Handle<FixedArray> tiny_obj = isolate->factory()->NewFixedArray(
       static_cast<int>(tiny_obj_size), AllocationType::kOld);
   CHECK_EQ(tiny_obj_page, Page::FromHeapObject(*tiny_obj));
 
   // The Tiny FreeListCategory should now be empty
-  CHECK(isolate->heap()->old_space()->free_list()->categories_[kTiny] == nullptr);
+  CHECK_NULL(isolate->heap()->old_space()->free_list()->categories_[kTiny]);
 }
 
 }  // namespace heap
