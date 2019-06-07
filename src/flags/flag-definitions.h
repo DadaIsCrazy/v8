@@ -759,7 +759,9 @@ DEFINE_BOOL(trace_idle_notification_verbose, false,
 DEFINE_BOOL(trace_gc_verbose, false,
             "print more details following each garbage collection")
 DEFINE_IMPLICATION(trace_gc_verbose, trace_gc)
-DEFINE_BOOL(trace_gc_alloc_sizes, false,
+DEFINE_BOOL(trace_gc_all_alloc_sizes, false,
+            "prints the size of each allocation")
+DEFINE_BOOL(trace_gc_fl_alloc_sizes, false,
             "prints the size of each allocation in freelists")
 DEFINE_BOOL(trace_gc_pages_stats, false,
             "prints statistics of the pages usage")

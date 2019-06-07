@@ -350,6 +350,9 @@ AllocationResult LocalAllocationBuffer::AllocateRawAligned(
 }
 
 bool PagedSpace::EnsureLinearAllocationArea(int size_in_bytes) {
+  if (FLAG_trace_gc_all_alloc_sizes) {
+    printf("Allocate(%d)\n", size_in_bytes);
+  }
   if (allocation_info_.top() + size_in_bytes <= allocation_info_.limit()) {
     return true;
   }

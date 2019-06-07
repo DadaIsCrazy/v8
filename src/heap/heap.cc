@@ -458,23 +458,38 @@ void Heap::PrintShortHeapStatistics() {
 }
 
 void Heap::PrintPagesStatistics() {
+  PrintIsolate(isolate_, "Pages freelists details: [category: length || total free bytes]\n");
+
   Page* page = static_cast<Page*>(old_space_->first_page());
   unsigned int pageCnt = 0;
+  int categories_lengths[6] = { 0 };
+  size_t categories_sums[6] = { 0 };
+
   while (page) {
+    base::OS::Print("Page %4u: ", pageCnt);
 
-    PrintIsolate(isolate_, "Page %u: ", pageCnt);
-
-    for (int cat = kFirstCategory; cat != kLastCategory+1; cat++) {
+    for (int cat = kFirstCategory; cat <= kLastCategory; cat++) {
       FreeListCategory* free_list =
           page->free_list_category(static_cast<FreeListCategoryType>(cat));
-      base::OS::Print("[%d: %5d || %5zu], ",
-                      cat, free_list->FreeListLength(), free_list->SumFreeList());
+      int length = free_list->FreeListLength();
+      size_t sum = free_list->SumFreeList();
+      base::OS::Print("[%d: %5d || %5zu]%s", cat, length, sum,
+                      cat == kLastCategory ? "\n" : ", ");
+      categories_lengths[cat] += length;
+      categories_sums[cat]    += sum;
     }
-    base::OS::Print("\n");
 
     page = page->next_page();
     pageCnt++;
   }
+
+  PrintIsolate(isolate_, "FreeLists global statistics: [category: length || total free bytes]\n");
+  for (int cat = 0; cat <= kLastCategory; cat++) {
+    base::OS::Print("[%d: %5d || %5zu]%s", cat, categories_lengths[cat],
+                    categories_sums[cat], cat == kLastCategory ? "\n" : ", ");
+  }
+
+
 }
 
 void Heap::DumpJSONHeapStatistics(std::stringstream& stream) {

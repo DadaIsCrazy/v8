@@ -852,6 +852,25 @@ void Page::ReleaseFreeListCategories() {
   }
 }
 
+// double Page::PrintFragmentation() {
+
+//   int length = 0;
+//   int sum    = 0;
+
+//   for (int cat = kFirstCategory; cat <= kLastCategory; cat++) {
+//     length += categories_[cat]->FreeListLength();
+//     sum    += categories_[cat]->SumFreeList();
+//   }
+
+//   // printf("Length = %d -- Sum = %d\n", length, sum);
+
+//   // free_memory should be equal to sum
+//   // double free_memory = MemoryChunkLayout::AllocatableMemoryInDataPage() -
+//   //                      allocated_bytes();
+
+
+// }
+
 Page* Page::ConvertNewToOld(Page* old_page) {
   DCHECK(old_page);
   DCHECK(old_page->InNewSpace());
@@ -2934,9 +2953,6 @@ FreeSpace FreeListCategory::PickNodeFromList(size_t minimum_size,
                                              size_t* node_size) {
   DCHECK(page()->CanAllocate());
   FreeSpace node = top();
-  if (FLAG_trace_gc_fl_alloc_fail) {
-    printf("FreeListCategory::PickNodeFromList(%zu). Top size = %d.\n", minimum_size, node.is_null() ? -1 : node.Size());
-  }
   DCHECK(!node.is_null());
   if (static_cast<size_t>(node.Size()) < minimum_size) {
     *node_size = 0;
@@ -3069,12 +3085,6 @@ FreeSpace FreeList::FindNodeIn(FreeListCategoryType type, size_t minimum_size,
 FreeSpace FreeList::TryFindNodeIn(FreeListCategoryType type,
                                   size_t minimum_size, size_t* node_size) {
   FreeListCategory* category = categories_[type];
-  if (FLAG_trace_gc_fl_alloc_fail) {
-    printf("FreeList::TryFindNodeIn(cat=%d,size=%zu)\n", type, minimum_size);
-    if (category == nullptr) {
-      printf("FreeList::TryFindNodeIn  ==> categories_[%d] == nullptr\n", type);
-    }
-  }
   if (category == nullptr) return FreeSpace();
   FreeSpace node = category->PickNodeFromList(minimum_size, node_size);
   if (!node.is_null()) {
@@ -3117,7 +3127,6 @@ FreeSpace FreeList::Allocate(size_t size_in_bytes, size_t* node_size) {
   // size of a free list category. This operation is constant time.
   FreeListCategoryType type =
       SelectFastAllocationFreeListCategoryType(size_in_bytes);
-  FreeListCategoryType type1 = type;
   for (int i = type; i < kHuge && node.is_null(); i++) {
     node = FindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
                       node_size);
@@ -3142,9 +3151,6 @@ FreeSpace FreeList::Allocate(size_t size_in_bytes, size_t* node_size) {
       // For this tiniest object, the tiny list hasn't been searched yet.
       // Now searching the tiny list.
       node = TryFindNodeIn(kTiny, size_in_bytes, node_size);
-      if (FLAG_trace_gc_fl_alloc_fail) {
-        printf("searching in Tiny...\n");
-      }
     }
 
     if (node.is_null()) {
@@ -3158,13 +3164,11 @@ FreeSpace FreeList::Allocate(size_t size_in_bytes, size_t* node_size) {
     Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
   }
 
-  if (FLAG_trace_gc_alloc_sizes) {
+  if (FLAG_trace_gc_fl_alloc_sizes) {
     if (!node.is_null()) {
-      // TODO: no better way to find isolate?
       PrintIsolate(Page::FromHeapObject(node)->heap()->isolate(),
                    "Allocate(%zu) = %zu\n", size_in_bytes, *node_size);
     } else {
-      // TODO: find isolate to print to?
       printf("Allocate(%zu) = %zu (null)\n", size_in_bytes, *node_size);
     }
   }
@@ -3173,17 +3177,8 @@ FreeSpace FreeList::Allocate(size_t size_in_bytes, size_t* node_size) {
     if (node.is_null()) {
       printf("Allocate(%zu)  =====> null   [cat:%d]\n", size_in_bytes, type);
       PrintFreeLists();
-      FreeListCategory* flTiny = categories_[1];
-      int length = FreeListCategory::AllFreeListsLength(flTiny);
-      size_t sum = FreeListCategory::SumAllFreeLists(flTiny);
-
-      if (length == 1 && sum >= size_in_bytes) {
-        printf("Here it's weird\n");
-        printf("%d %d %zu\n", type1, length1, sum1);
-        exit(1);
-      }
-
-      fflush(stdout);
+      printf("top(%d) = %d bytes\n", type, categories_[type] == nullptr ? -1 :
+             categories_[type]->top().Size());
     }
   }
 

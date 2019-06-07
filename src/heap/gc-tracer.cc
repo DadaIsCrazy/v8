@@ -370,10 +370,10 @@ void GCTracer::Stop(GarbageCollector collector) {
     heap_->PrintShortHeapStatistics();
   }
 
-  // if (FLAG_trace_gc_pages_stats) {
-  //   PrintIsolate(heap_->isolate(), "Pages statistics after collection:\n");
-  //   heap_->PrintPagesStatistics();
-  // }
+  if (FLAG_trace_gc_pages_stats) {
+    PrintIsolate(heap_->isolate(), "Pages statistics after collection:\n");
+    heap_->PrintPagesStatistics();
+  }
 
   if (V8_UNLIKELY(TracingFlags::gc.load(std::memory_order_relaxed) &
                   v8::tracing::TracingCategoryObserver::ENABLED_BY_TRACING)) {
