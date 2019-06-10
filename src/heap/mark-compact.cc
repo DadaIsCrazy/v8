@@ -688,6 +688,8 @@ void MarkCompactCollector::CollectEvacuationCandidates(PagedSpace* space) {
         AddEvacuationCandidate(p);
       }
     }
+  } else if (FLAG_gc_experiment_less_compaction) {
+    // Do not compact
   } else {
     // The following approach determines the pages that should be evacuated.
     //

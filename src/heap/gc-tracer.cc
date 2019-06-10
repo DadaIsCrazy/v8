@@ -266,7 +266,7 @@ void GCTracer::Start(GarbageCollector collector,
     counters->mark_compact_reason()->AddSample(static_cast<int>(gc_reason));
     if (FLAG_trace_gc_pages_stats) {
       PrintIsolate(heap_->isolate(), "Pages statistics before collection:\n");
-      heap_->PrintPagesStatistics();
+      heap_->PrintPagesFreeListsStatistics();
     }
   }
 }
@@ -370,9 +370,9 @@ void GCTracer::Stop(GarbageCollector collector) {
     heap_->PrintShortHeapStatistics();
   }
 
-  if (FLAG_trace_gc_pages_stats) {
+  if (FLAG_trace_gc_pages_stats && collector != SCAVENGER) {
     PrintIsolate(heap_->isolate(), "Pages statistics after collection:\n");
-    heap_->PrintPagesStatistics();
+    heap_->PrintPagesFreeListsStatistics();
   }
 
   if (V8_UNLIKELY(TracingFlags::gc.load(std::memory_order_relaxed) &

@@ -482,7 +482,7 @@ class Heap {
   void PrintShortHeapStatistics();
 
   // Print pages usage statistics.
-  void PrintPagesStatistics();
+  void PrintPagesFreeListsStatistics();
 
   // Dump heap statistics in JSON format.
   void DumpJSONHeapStatistics(std::stringstream& stream);
