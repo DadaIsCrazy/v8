@@ -458,15 +458,10 @@ void MarkCompactCollector::AddEvacuationCandidate(Page* p) {
   DCHECK(!p->NeverEvacuate());
 
   if (FLAG_trace_evacuation_candidates) {
-    int length = 0;
-    for (int cat = kFirstCategory; cat <= kLastCategory; cat++) {
-      length += p->free_list_category(static_cast<FreeListCategoryType>(cat))
-                    ->FreeListLength();
-    }
     PrintIsolate(
         isolate(),
         "Evacuation candidate: Free bytes: %6zu. Free Lists length: %4d.\n",
-        p->area_size() - p->allocated_bytes(), length);
+        p->area_size() - p->allocated_bytes(), p->FreeListsLength());
   }
 
   p->MarkEvacuationCandidate();
