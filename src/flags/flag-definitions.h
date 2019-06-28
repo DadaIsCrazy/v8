@@ -781,6 +781,8 @@ DEFINE_BOOL(trace_gc_freelists_verbose, false,
             "prints details of freelists of each page before and after "
             "each major garbage collection")
 DEFINE_IMPLICATION(trace_gc_freelists_verbose, trace_gc_freelists)
+DEFINE_BOOL(trace_freelist_allocate, false,
+            "print the number of calls to FreeList::Allocate")
 DEFINE_BOOL(trace_evacuation_candidates, false,
             "Show statistics about the pages evacuation by the compaction")
 

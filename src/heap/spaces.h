@@ -1831,7 +1831,7 @@ class FreeList {
     return kHuge;
   }
 
-  FreeList();
+  explicit FreeList(Heap* heap);
 
   // Adds a node on the free list. The block of size {size_in_bytes} starting
   // at {start} is placed on the free list. The return value is the number of
@@ -1970,6 +1970,7 @@ class FreeList {
 
   std::atomic<size_t> wasted_bytes_;
   FreeListCategory* categories_[kNumberOfCategories];
+  Heap* heap_;
 
   friend class FreeListCategory;
   friend class heap::HeapTester;

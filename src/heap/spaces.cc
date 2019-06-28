@@ -1616,7 +1616,9 @@ intptr_t Space::GetNextInlineAllocationStepSize() {
 
 PagedSpace::PagedSpace(Heap* heap, AllocationSpace space,
                        Executability executable)
-    : SpaceWithLinearArea(heap, space), executable_(executable) {
+    : SpaceWithLinearArea(heap, space),
+      executable_(executable),
+      free_list_(heap) {
   area_size_ = MemoryChunkLayout::AllocatableMemoryInMemoryChunk(space);
   accounting_stats_.Clear();
 }
@@ -3026,13 +3028,12 @@ void FreeListCategory::Relink() {
   owner()->AddCategory(this);
 }
 
-FreeList::FreeList() : wasted_bytes_(0) {
+FreeList::FreeList(Heap* heap) : wasted_bytes_(0), heap_(heap) {
   for (int i = kFirstCategory; i < kNumberOfCategories; i++) {
     categories_[i] = nullptr;
   }
   Reset();
 }
-
 
 void FreeList::Reset() {
   ForAllFreeListCategories(
@@ -3099,6 +3100,10 @@ FreeSpace FreeList::SearchForNodeInList(FreeListCategoryType type,
 
 FreeSpace FreeList::Allocate(size_t size_in_bytes, size_t* node_size) {
   DCHECK_GE(kMaxBlockSize, size_in_bytes);
+  if (FLAG_trace_freelist_allocate) {
+    heap_->LogFreeListAllocate();
+  }
+
   FreeSpace node;
   // First try the allocation fast path: try to allocate the minimum element
   // size of a free list category. This operation is constant time.
