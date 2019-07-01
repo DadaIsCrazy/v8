@@ -329,7 +329,9 @@ namespace internal {
   SC(wasm_reloc_size, V8.WasmRelocBytes)                             \
   SC(wasm_lazily_compiled_functions, V8.WasmLazilyCompiledFunctions) \
   SC(liftoff_compiled_functions, V8.LiftoffCompiledFunctions)        \
-  SC(liftoff_unsupported_functions, V8.LiftoffUnsupportedFunctions)
+  SC(liftoff_unsupported_functions, V8.LiftoffUnsupportedFunctions)  \
+  /* Number of calls to FreeList::Allocate. */                       \
+  SC(freelist_allocate_count, V8.FreeListAllocateCount)
 
 // List of counters that can be incremented from generated code. We need them in
 // a separate list to be able to relocate them.

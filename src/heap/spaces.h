@@ -1831,7 +1831,7 @@ class FreeList {
     return kHuge;
   }
 
-  FreeList();
+  explicit FreeList(Isolate* isolate);
 
   // Adds a node on the free list. The block of size {size_in_bytes} starting
   // at {start} is placed on the free list. The return value is the number of
@@ -1899,12 +1899,6 @@ class FreeList {
 
   // Returns a page containing an entry for a given type, or nullptr otherwise.
   inline Page* GetPageForCategoryType(FreeListCategoryType type);
-
-  // Get count of calls to FreeList::Allocate
-  static int freelist_allocate_count() { return freelist_allocate_count_; }
-
-  // Update the count of calls to FreeList::Allocate.
-  static void LogFreeListAllocate() { freelist_allocate_count_++; }
 
 #ifdef DEBUG
   size_t SumFreeLists();
@@ -1977,8 +1971,7 @@ class FreeList {
   std::atomic<size_t> wasted_bytes_;
   FreeListCategory* categories_[kNumberOfCategories];
 
-  // Number of calls to FreeList::Allocate
-  static std::atomic<int> freelist_allocate_count_;
+  Isolate* isolate_;
 
   friend class FreeListCategory;
   friend class heap::HeapTester;

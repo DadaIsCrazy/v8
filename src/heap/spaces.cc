@@ -1617,7 +1617,8 @@ intptr_t Space::GetNextInlineAllocationStepSize() {
 PagedSpace::PagedSpace(Heap* heap, AllocationSpace space,
                        Executability executable)
     : SpaceWithLinearArea(heap, space),
-      executable_(executable) {
+      executable_(executable),
+      free_list_(heap->isolate()) {
   area_size_ = MemoryChunkLayout::AllocatableMemoryInMemoryChunk(space);
   accounting_stats_.Clear();
 }
@@ -3022,14 +3023,12 @@ void FreeListCategory::RepairFreeList(Heap* heap) {
   }
 }
 
-std::atomic<int> FreeList::freelist_allocate_count_{0};
-
 void FreeListCategory::Relink() {
   DCHECK(!is_linked());
   owner()->AddCategory(this);
 }
 
-FreeList::FreeList() : wasted_bytes_(0) {
+FreeList::FreeList(Isolate* isolate) : wasted_bytes_(0), isolate_(isolate) {
   for (int i = kFirstCategory; i < kNumberOfCategories; i++) {
     categories_[i] = nullptr;
   }
@@ -3102,7 +3101,7 @@ FreeSpace FreeList::SearchForNodeInList(FreeListCategoryType type,
 FreeSpace FreeList::Allocate(size_t size_in_bytes, size_t* node_size) {
   DCHECK_GE(kMaxBlockSize, size_in_bytes);
   if (FLAG_trace_freelist_allocate) {
-    LogFreeListAllocate();
+    isolate_->counters()->freelist_allocate_count()->Increment();
   }
 
   FreeSpace node;

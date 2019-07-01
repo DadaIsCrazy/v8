@@ -205,11 +205,7 @@ Heap::Heap()
   RememberUnmappedPage(kNullAddress, false);
 }
 
-Heap::~Heap() {
-  if (FLAG_trace_freelist_allocate) {
-    PrintIsolate(isolate_, "Calls to FreeList::Allocate: %d\n", FreeList::freelist_allocate_count());
-  }
-}
+Heap::~Heap() = default;
 
 size_t Heap::MaxReserved() {
   const size_t kMaxNewLargeObjectSpaceSize = max_semi_space_size_;
