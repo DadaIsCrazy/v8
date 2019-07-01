@@ -3102,33 +3102,48 @@ FreeSpace FreeList::Allocate(size_t size_in_bytes, size_t* node_size) {
   FreeSpace node;
   // First try the allocation fast path: try to allocate the minimum element
   // size of a free list category. This operation is constant time.
-  FreeListCategoryType type =
-      SelectFastAllocationFreeListCategoryType(size_in_bytes);
-  for (int i = type; i < kHuge && node.is_null(); i++) {
-    node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
-                         node_size);
-  }
+  FreeListCategoryType type;
 
-  if (node.is_null()) {
-    // Next search the huge list for free list nodes. This takes linear time in
-    // the number of huge elements.
-    node = SearchForNodeInList(kHuge, node_size, size_in_bytes);
-  }
-
-  if (node.is_null() && type != kHuge) {
-    // We didn't find anything in the huge list.
+  if (FLAG_gc_experiment_alloc_strat) {
+    // Trying to prioritize bigger freelists.
     type = SelectFreeListCategoryType(size_in_bytes);
-
-    if (type == kTiniest) {
-      // For this tiniest object, the tiny list hasn't been searched yet.
-      // Now searching the tiny list.
-      node = TryFindNodeIn(kTiny, size_in_bytes, node_size);
+    for (int i = kHuge; i >= type && node.is_null(); i--) {
+      node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                           node_size);
+    }
+    if (node.is_null()) {
+      // Next search the huge list for free list nodes. This takes linear time in
+      // the number of huge elements.
+      node = SearchForNodeInList(kHuge, node_size, size_in_bytes);
+    }
+  } else {
+    type = SelectFastAllocationFreeListCategoryType(size_in_bytes);
+    for (int i = type; i < kHuge && node.is_null(); i++) {
+      node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                           node_size);
     }
 
     if (node.is_null()) {
-      // Now search the best fitting free list for a node that has at least the
-      // requested size.
-      node = TryFindNodeIn(type, size_in_bytes, node_size);
+      // Next search the huge list for free list nodes. This takes linear time in
+      // the number of huge elements.
+      node = SearchForNodeInList(kHuge, node_size, size_in_bytes);
+    }
+
+    if (node.is_null() && type != kHuge) {
+      // We didn't find anything in the huge list.
+      type = SelectFreeListCategoryType(size_in_bytes);
+
+      if (type == kTiniest) {
+        // For this tiniest object, the tiny list hasn't been searched yet.
+        // Now searching the tiny list.
+        node = TryFindNodeIn(kTiny, size_in_bytes, node_size);
+      }
+
+      if (node.is_null()) {
+        // Now search the best fitting free list for a node that has at least the
+        // requested size.
+        node = TryFindNodeIn(type, size_in_bytes, node_size);
+      }
     }
   }
 
