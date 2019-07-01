@@ -207,8 +207,7 @@ Heap::Heap()
 
 Heap::~Heap() {
   if (FLAG_trace_freelist_allocate) {
-    PrintIsolate(isolate_, "Calls to FreeList::Allocate: %d\n",
-                 freelist_allocate_count_);
+    PrintIsolate(isolate_, "Calls to FreeList::Allocate: %d\n", FreeList::freelist_allocate_count());
   }
 }
 

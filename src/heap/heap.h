@@ -470,9 +470,6 @@ class Heap {
   // Number of "runtime allocations" done so far.
   uint32_t allocations_count() { return allocations_count_; }
 
-  // Update the count of calls to FreeList::Allocate.
-  void LogFreeListAllocate() { freelist_allocate_count_++; }
-
   // Print short heap statistics.
   void PrintShortHeapStatistics();
 
@@ -1896,9 +1893,6 @@ class Heap {
 
   // How many "runtime allocations" happened.
   uint32_t allocations_count_ = 0;
-
-  // Number of calls to FreeList::Allocate
-  int freelist_allocate_count_ = 0;
 
   // Running hash over allocations performed.
   uint32_t raw_allocations_hash_ = 0;
