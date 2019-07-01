@@ -691,7 +691,14 @@ void MarkCompactCollector::CollectEvacuationCandidates(PagedSpace* space) {
       // Only the pages with at more than |free_bytes_threshold| free bytes are
       // considered for evacuation.
       if (area_size - p->allocated_bytes() >= free_bytes_threshold) {
-        pages.push_back(std::make_pair(p->allocated_bytes(), p));
+        if (FLAG_gc_experiment_better_compaction) {
+          pages.push_back(
+              std::make_pair(p->FreeListsLength() * p->FreeListsLength() *
+                                 (area_size - p->allocated_bytes()),
+                             p));
+        } else {
+          pages.push_back(std::make_pair(p->allocated_bytes(), p));
+        }
       }
     } else {
       pages.push_back(std::make_pair(p->allocated_bytes(), p));
