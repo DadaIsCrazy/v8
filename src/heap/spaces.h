@@ -176,7 +176,10 @@ class FreeListCategory {
   // Performs a single try to pick a node of at least |minimum_size| from the
   // category. Stores the actual size in |node_size|. Returns nullptr if no
   // node is found.
-  FreeSpace PickNodeFromList(size_t minimum_size, size_t* node_size);
+  // If |retry| is specified and greater than 0, then looks at the first
+  // |retry|+1 entries of the freelist (unless a node of size >= |minimum_size|
+  // is found before).
+  FreeSpace PickNodeFromList(size_t minimum_size, size_t* node_size, int retry = -1);
 
   // Picks a node of at least |minimum_size| from the category. Stores the
   // actual size in |node_size|. Returns nullptr if no node is found.
@@ -192,6 +195,9 @@ class FreeListCategory {
 
   size_t SumFreeList();
   int FreeListLength() { return length_; }
+
+  size_t SumAllFreeLists();
+  int AllFreeListsLength();
 
  private:
   // For debug builds we accurately compute free lists lengths up until
@@ -549,6 +555,9 @@ class MemoryChunk {
   size_t area_size() { return static_cast<size_t>(area_end() - area_start()); }
 
   int FreeListsLength();
+
+  // Prints the lengths/free bytes of each FreeListCategory of this chunk.
+  void PrintFreeListsShortStats(char const* reason);
 
   // Approximate amount of physical memory committed for this chunk.
   V8_EXPORT_PRIVATE size_t CommittedPhysicalMemory();
@@ -1831,7 +1840,7 @@ class FreeList {
     return kHuge;
   }
 
-  FreeList();
+  FreeList(Heap* heap);
 
   // Adds a node on the free list. The block of size {size_in_bytes} starting
   // at {start} is placed on the free list. The return value is the number of
@@ -1900,6 +1909,8 @@ class FreeList {
   // Returns a page containing an entry for a given type, or nullptr otherwise.
   inline Page* GetPageForCategoryType(FreeListCategoryType type);
 
+  void PrintFreeListsShortStats();
+
 #ifdef DEBUG
   size_t SumFreeLists();
   bool IsVeryLong();
@@ -1944,8 +1955,11 @@ class FreeList {
   // Tries to retrieve a node from the first category in a given |type|.
   // Returns nullptr if the category is empty or the top entry is smaller
   // than minimum_size.
+  // If |retry| is specified and greater than 0, then looks at the first
+  // |retry|+1 entries of the freelist (unless a node of size >= |minimum_size|
+  // is found before).
   FreeSpace TryFindNodeIn(FreeListCategoryType type, size_t minimum_size,
-                          size_t* node_size);
+                          size_t* node_size, int retry = -1);
 
   // Searches a given |type| for a node of at least |minimum_size|.
   FreeSpace SearchForNodeInList(FreeListCategoryType type, size_t* node_size,
@@ -1970,6 +1984,7 @@ class FreeList {
 
   std::atomic<size_t> wasted_bytes_;
   FreeListCategory* categories_[kNumberOfCategories];
+  Heap* heap_;
 
   friend class FreeListCategory;
   friend class heap::HeapTester;

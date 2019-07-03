@@ -4,6 +4,7 @@
 
 #include "src/heap/mark-compact.h"
 
+#include <math.h>
 #include <unordered_map>
 
 #include "src/base/utils/random-number-generator.h"
@@ -462,6 +463,7 @@ void MarkCompactCollector::AddEvacuationCandidate(Page* p) {
         isolate(),
         "Evacuation candidate: Free bytes: %6zu. Free Lists length: %4d.\n",
         p->area_size() - p->allocated_bytes(), p->FreeListsLength());
+    p->PrintFreeListsShortStats("Candidate FLCs");
   }
 
   p->MarkEvacuationCandidate();
@@ -690,7 +692,11 @@ void MarkCompactCollector::CollectEvacuationCandidates(PagedSpace* space) {
       // Only the pages with at more than |free_bytes_threshold| free bytes are
       // considered for evacuation.
       if (area_size - p->allocated_bytes() >= free_bytes_threshold) {
-        pages.push_back(std::make_pair(p->allocated_bytes(), p));
+        if (FLAG_gc_experiment_better_compaction) {
+          pages.push_back(std::make_pair(p->FreeListsLength() * p->FreeListsLength() * (area_size - p->allocated_bytes()), p));
+        } else {
+          pages.push_back(std::make_pair(p->allocated_bytes(), p));
+        }
       }
     } else {
       pages.push_back(std::make_pair(p->allocated_bytes(), p));
@@ -737,13 +743,39 @@ void MarkCompactCollector::CollectEvacuationCandidates(PagedSpace* space) {
     // the first n pages for evacuation such that:
     // - the total size of evacuated objects does not exceed the specified
     // limit.
-    // - fragmentation of (n+1)-th page does not exceed the specified limit.
-    std::sort(pages.begin(), pages.end(),
-              [](const LiveBytesPagePair& a, const LiveBytesPagePair& b) {
-                return a.first < b.first;
-              });
+    // - fragmentation of (n+1)-th page does not exceed the specified limit.else
+
+    if (FLAG_gc_experiment_better_compaction) {
+       std::sort(pages.begin(), pages.end(),
+                [](const LiveBytesPagePair& a, const LiveBytesPagePair& b) {
+                  // Bellow: Length * (Free space / Used space)
+                  // int len_a = 0, len_b = 0;
+                  // for (int cat = kFirstCategory; cat <= kLastCategory; cat++) {
+                  //   len_a += a.second->free_list_category(static_cast<FreeListCategoryType>(cat))->FreeListLength();
+                  //   len_b += b.second->free_list_category(static_cast<FreeListCategoryType>(cat))->FreeListLength();
+                  // }
+                  // size_t usage_a = (a.second->area_size() - a.second->allocated_bytes()) / a.second->allocated_bytes();
+                  // size_t usage_b = (b.second->area_size() - b.second->allocated_bytes()) / b.second->allocated_bytes();
+                  // return (len_a * usage_a) < (len_b * usage_b);
+
+                  // Bellow: Length^2 * FreeBytes
+                  // int len_a = a.second->FreeListsLength();
+                  // int len_b = b.second->FreeListsLength();
+                  // size_t free_a = a.second->area_size() - a.second->allocated_bytes();
+                  // size_t free_b = b.second->area_size() - b.second->allocated_bytes();
+                  // //return (len_a * len_a * free_a) > (len_b * len_b * free_b);
+                  // return (pow(len_a, 2)*free_a) > (pow(len_b, 2)*free_b);
+                  return a.first > b.first;
+                });
+    } else {
+      std::sort(pages.begin(), pages.end(),
+                [](const LiveBytesPagePair& a, const LiveBytesPagePair& b) {
+                  return a.first < b.first;
+                });
+    }
     for (size_t i = 0; i < pages.size(); i++) {
-      size_t live_bytes = pages[i].first;
+      // size_t live_bytes = pages[i].first;
+      size_t live_bytes = pages[i].second->allocated_bytes();
       DCHECK_GE(area_size, live_bytes);
       if (FLAG_always_compact ||
           ((total_live_bytes + live_bytes) <= max_evacuated_bytes)) {

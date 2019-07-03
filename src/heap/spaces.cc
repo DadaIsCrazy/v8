@@ -5,6 +5,7 @@
 #include "src/heap/spaces.h"
 
 #include <cinttypes>
+#include <iomanip>
 #include <utility>
 
 #include "src/base/bits.h"
@@ -1616,7 +1617,7 @@ intptr_t Space::GetNextInlineAllocationStepSize() {
 
 PagedSpace::PagedSpace(Heap* heap, AllocationSpace space,
                        Executability executable)
-    : SpaceWithLinearArea(heap, space), executable_(executable) {
+    : SpaceWithLinearArea(heap, space), executable_(executable), free_list_(heap) {
   area_size_ = MemoryChunkLayout::AllocatableMemoryInMemoryChunk(space);
   accounting_stats_.Clear();
 }
@@ -2949,18 +2950,74 @@ void FreeListCategory::Reset() {
 }
 
 FreeSpace FreeListCategory::PickNodeFromList(size_t minimum_size,
-                                             size_t* node_size) {
+                                             size_t* node_size,
+                                             int retry) {
   DCHECK(page()->CanAllocate());
   FreeSpace node = top();
   DCHECK(!node.is_null());
+
   if (static_cast<size_t>(node.Size()) < minimum_size) {
+    // First element too small.
+
+    if (retry > 0) {
+      // Searching the next elements.
+
+      FreeSpace prev;
+      while (!node.is_null() && static_cast<size_t>(node.Size()) < minimum_size && retry > 0) {
+        // Searching in the current FreeListCategory.
+        prev = node;
+        node = node.next();
+        retry--;
+      }
+
+      if (!node.is_null() && static_cast<size_t>(node.Size()) >= minimum_size) {
+        // Found a node big enough in the current FreeListCategory
+        MemoryChunk* chunk = MemoryChunk::FromHeapObject(prev);
+        if (chunk->owner_identity() == CODE_SPACE) {
+          chunk->heap()->UnprotectAndRegisterMemoryChunk(chunk);
+        }
+        prev.set_next(node.next());
+        *node_size = node.Size();
+        available_ -= *node_size;
+        length_--;
+
+        // No need to check if RemoveCategory needs to be called:
+        // since we didn't pick the top(), the category can be empty.
+
+        if (FLAG_trace_freelists_allocate_retry) {
+          printf("Retry worked after %d tries.\n", FLAG_freelists_allocate_retry - retry);
+        }
+
+        return node;
+      }
+
+      if ((node.is_null() || static_cast<size_t>(node.Size()) < minimum_size) && retry > 0 && next() != nullptr) {
+        // Not found in the current FreeListCategory; searching the next one.
+        return next()->PickNodeFromList(minimum_size, node_size, retry-1);
+      }
+
+      // Retry didn't find a chunk big enough. Falling back to default behavior.
+    }
+
     *node_size = 0;
     return FreeSpace();
   }
+
+  if (FLAG_trace_freelists_allocate_retry) {
+    if (retry != -1 && retry != FLAG_freelists_allocate_retry) {
+      printf("Retry worked after %d tries.\n", FLAG_freelists_allocate_retry - retry);
+    } else {
+      printf("Retry worked after 0 tries.\n");
+    }
+  }
+
   set_top(node.next());
   *node_size = node.Size();
   available_ -= *node_size;
   length_--;
+  if (top().is_null()) {
+    free_list_->RemoveCategory(this);
+  }
   return node;
 }
 
@@ -3026,7 +3083,8 @@ void FreeListCategory::Relink() {
   owner()->AddCategory(this);
 }
 
-FreeList::FreeList() : wasted_bytes_(0) {
+FreeList::FreeList(Heap* heap) :
+    wasted_bytes_(0), heap_(heap) {
   for (int i = kFirstCategory; i < kNumberOfCategories; i++) {
     categories_[i] = nullptr;
   }
@@ -3063,17 +3121,13 @@ size_t FreeList::Free(Address start, size_t size_in_bytes, FreeMode mode) {
   return 0;
 }
 
-
 FreeSpace FreeList::TryFindNodeIn(FreeListCategoryType type,
-                                  size_t minimum_size, size_t* node_size) {
+                                  size_t minimum_size, size_t* node_size, int retry) {
   FreeListCategory* category = categories_[type];
   if (category == nullptr) return FreeSpace();
-  FreeSpace node = category->PickNodeFromList(minimum_size, node_size);
+  FreeSpace node = category->PickNodeFromList(minimum_size, node_size, retry);
   if (!node.is_null()) {
     DCHECK(IsVeryLong() || Available() == SumFreeLists());
-  }
-  if (category->is_empty()) {
-    RemoveCategory(category);
   }
   return node;
 }
@@ -3099,41 +3153,86 @@ FreeSpace FreeList::SearchForNodeInList(FreeListCategoryType type,
 
 FreeSpace FreeList::Allocate(size_t size_in_bytes, size_t* node_size) {
   DCHECK_GE(kMaxBlockSize, size_in_bytes);
+  if (FLAG_trace_freelist_allocate) {
+    heap_->LogFreeListAllocate();
+  }
+
+  if (FLAG_trace_mem_alloc_freelists) {
+    PrintF("FreeList::Allocate => %zu\n", size_in_bytes);
+  }
+
   FreeSpace node;
   // First try the allocation fast path: try to allocate the minimum element
   // size of a free list category. This operation is constant time.
-  FreeListCategoryType type =
-      SelectFastAllocationFreeListCategoryType(size_in_bytes);
-  for (int i = type; i < kHuge && node.is_null(); i++) {
-    node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
-                         node_size);
-  }
+  FreeListCategoryType type;
 
-  if (node.is_null()) {
-    // Next search the huge list for free list nodes. This takes linear time in
-    // the number of huge elements.
-    node = SearchForNodeInList(kHuge, node_size, size_in_bytes);
-  }
-
-  if (node.is_null() && type != kHuge) {
-    // We didn't find anything in the huge list.
+  if (FLAG_gc_experiment_alloc_strat) {
+    // Trying to prioritize bigger freelists.
     type = SelectFreeListCategoryType(size_in_bytes);
-
-    if (type == kTiniest) {
-      // For this tiniest object, the tiny list hasn't been searched yet.
-      // Now searching the tiny list.
-      node = TryFindNodeIn(kTiny, size_in_bytes, node_size);
+    for (int i = kHuge; i >= type && i > kSmall && node.is_null(); i--) {
+      node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                           node_size);
+    }
+    if (node.is_null()) {
+      // Next search the huge list for free list nodes. This takes linear time in
+      // the number of huge elements.
+      node = SearchForNodeInList(kHuge, node_size, size_in_bytes);
+    }
+  } else if (FLAG_gc_experiment_no_small_fl_alloc) {
+    for (int i = kHuge; i >= kLarge && node.is_null(); i--) {
+      node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                           node_size);
+    }
+  } else if (FLAG_gc_experiment_fl_alloc_best_fit) {
+    type = SelectFreeListCategoryType(size_in_bytes);
+    for (int i = type; i <= kHuge && node.is_null(); i++) {
+      node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                           node_size, FLAG_freelists_allocate_retry);
+    }
+  } else {
+    type = SelectFastAllocationFreeListCategoryType(size_in_bytes);
+    for (int i = type; i < kHuge && node.is_null(); i++) {
+      node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                           node_size);
     }
 
     if (node.is_null()) {
-      // Now search the best fitting free list for a node that has at least the
-      // requested size.
-      node = TryFindNodeIn(type, size_in_bytes, node_size);
+      // Next search the huge list for free list nodes. This takes linear time in
+      // the number of huge elements.
+      node = SearchForNodeInList(kHuge, node_size, size_in_bytes);
+    }
+
+    if (node.is_null() && type != kHuge) {
+      // We didn't find anything in the huge list.
+      type = SelectFreeListCategoryType(size_in_bytes);
+
+      if (type == kTiniest) {
+        // For this tiniest object, the tiny list hasn't been searched yet.
+        // Now searching the tiny list.
+        node = TryFindNodeIn(kTiny, size_in_bytes, node_size);
+      }
+
+      if (node.is_null()) {
+        // Now search the best fitting free list for a node that has at least the
+        // requested size.
+        node = TryFindNodeIn(type, size_in_bytes, node_size,
+                             FLAG_freelists_allocate_retry);
+      }
     }
   }
 
   if (!node.is_null()) {
     Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+  }
+
+  if (node.is_null() && FLAG_trace_freelists_allocate_retry && FLAG_freelists_allocate_retry != 0) {
+    printf("Retrying didn't work.\n");
+  }
+
+  if (FLAG_trace_mem_alloc_freelists_fail && node.is_null() && Available() > size_in_bytes) {
+    PrintF("FreeList::Allocate didn't find a element of size >= %zu.\n",
+           size_in_bytes);
+    PrintFreeListsShortStats();
   }
 
   DCHECK(IsVeryLong() || Available() == SumFreeLists());
@@ -3236,6 +3335,50 @@ size_t FreeListCategory::SumFreeList() {
     cur = cur.next();
   }
   return sum;
+}
+
+size_t FreeListCategory::SumAllFreeLists() {
+  FreeListCategory* free_list = this;
+  size_t sum = 0;
+  while (free_list) {
+    sum += free_list->SumFreeList();
+    free_list = free_list->next();
+  }
+  return sum;
+}
+
+int FreeListCategory::AllFreeListsLength() {
+  FreeListCategory* free_list = this;
+  int length = 0;
+  while (free_list) {
+    length += free_list->FreeListLength();
+    free_list = free_list->next();
+  }
+  return length;
+}
+
+void FreeList::PrintFreeListsShortStats() {
+  std::ostringstream out_str;
+
+  for (int cat = 0; cat <= kLastCategory; cat++) {
+    out_str << "[" << cat << ": " << categories_[cat]->AllFreeListsLength()
+            << " || " << categories_[cat]->SumAllFreeLists()
+            << " B]" << (cat == kLastCategory ? "\n" : ", ");
+  }
+
+  PrintF("Freelists: %s", out_str.str().c_str());
+}
+
+void MemoryChunk::PrintFreeListsShortStats(char const* reason) {
+  std::ostringstream out_str;
+
+  for (int cat = 0; cat <= kLastCategory; cat++) {
+    out_str << "[" << cat << ": " << categories_[cat]->FreeListLength()
+            << " || " << categories_[cat]->SumFreeList()
+            << " B]" << (cat == kLastCategory ? "\n" : ", ");
+  }
+
+  PrintIsolate(heap_->isolate(), "%s: %s", reason, out_str.str().c_str());
 }
 
 #ifdef DEBUG

@@ -781,9 +781,24 @@ DEFINE_BOOL(trace_gc_freelists_verbose, false,
             "prints details of freelists of each page before and after "
             "each major garbage collection")
 DEFINE_IMPLICATION(trace_gc_freelists_verbose, trace_gc_freelists)
+DEFINE_BOOL(trace_freelist_allocate, false,
+            "print the number of calls to FreeList::Allocate")
+DEFINE_BOOL(trace_mem_alloc, false,
+            "print the size of each memory allocation")
+DEFINE_BOOL(trace_mem_alloc_freelists, false,
+            "print the size of each allocation that ends up in the freelists")
+DEFINE_BOOL(trace_mem_alloc_freelists_fail, false,
+            "print freelists when memory is requested from them but not found")
+DEFINE_INT(freelists_allocate_retry, -1,
+           "try the first <n> elements of the freelists instead of just the first one")
+DEFINE_BOOL(trace_freelists_allocate_retry, false,
+           "print traces for freelist allocations retries and fails")
 DEFINE_BOOL(trace_evacuation_candidates, false,
             "Show statistics about the pages evacuation by the compaction")
+DEFINE_BOOL(no_fast_path_fl_alloc, false,
+            "Don't use fast path for allocation in freelists")
 
+    
 DEFINE_INT(trace_allocation_stack_interval, -1,
            "print stack trace after <n> free-list allocations")
 DEFINE_INT(trace_duplicate_threshold_kb, 0,
@@ -906,6 +921,14 @@ DEFINE_BOOL(gc_experiment_background_schedule, false,
             "new background GC schedule heuristics")
 DEFINE_BOOL(gc_experiment_less_compaction, false,
             "less compaction in non-memory reducing mode")
+DEFINE_BOOL(gc_experiment_better_compaction, false,
+            "use better compaction heuristics")
+DEFINE_BOOL(gc_experiment_alloc_strat, false,
+            "try a new allocation strategy in the freelists")
+DEFINE_BOOL(gc_experiment_no_small_fl_alloc, false,
+            "Don't allocate in the freelists")
+DEFINE_BOOL(gc_experiment_fl_alloc_best_fit, false,
+            "Allocate in the most adapted freelist")
 
 DEFINE_BOOL(disable_abortjs, false, "disables AbortJS runtime function")
 

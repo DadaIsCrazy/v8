@@ -383,6 +383,9 @@ HeapObject PagedSpace::TryAllocateLinearlyAligned(
 }
 
 AllocationResult PagedSpace::AllocateRawUnaligned(int size_in_bytes) {
+  if (FLAG_trace_mem_alloc) {
+    printf("Allocate: %d\n", size_in_bytes);
+  }
   DCHECK_IMPLIES(identity() == RO_SPACE, !IsDetached());
   if (!EnsureLinearAllocationArea(size_in_bytes)) {
     return AllocationResult::Retry(identity());
