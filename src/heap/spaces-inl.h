@@ -182,7 +182,7 @@ size_t PagedSpace::RelinkFreeListCategories(Page* page) {
   DCHECK_EQ(this, page->owner());
   size_t added = 0;
   page->ForAllFreeListCategories([this, &added](FreeListCategory* category) {
-    category->set_free_list(&free_list_);
+    category->set_free_list(free_list_);
     added += category->available();
     category->Relink();
   });
