@@ -31,6 +31,7 @@
 #include "src/base/platform/platform.h"
 #include "src/heap/factory.h"
 #include "src/heap/spaces-inl.h"
+#include "src/heap/spaces.h"
 #include "src/objects/free-space.h"
 #include "src/objects/objects-inl.h"
 #include "src/snapshot/snapshot.h"
@@ -109,8 +110,9 @@ static void VerifyMemoryChunk(Isolate* isolate, Heap* heap,
   size_t guard_size =
       (executable == EXECUTABLE) ? MemoryChunkLayout::CodePageGuardSize() : 0;
 
-  MemoryChunk* memory_chunk = memory_allocator->AllocateChunk(
-      reserve_area_size, commit_area_size, executable, space);
+  MemoryChunk* memory_chunk =
+      memory_allocator->AllocateChunk(reserve_area_size, commit_area_size,
+                                      executable, space, new FreeListLegacy());
   size_t reserved_size =
       ((executable == EXECUTABLE))
           ? allocatable_memory_area_offset +
@@ -182,7 +184,7 @@ TEST(MemoryAllocator) {
   CHECK(!faked_space.last_page());
   Page* first_page = memory_allocator->AllocatePage(
       faked_space.AreaSize(), static_cast<PagedSpace*>(&faked_space),
-      NOT_EXECUTABLE);
+      NOT_EXECUTABLE, new FreeListLegacy());
 
   faked_space.memory_chunk_list().PushBack(first_page);
   CHECK(first_page->next_page() == nullptr);
@@ -195,7 +197,7 @@ TEST(MemoryAllocator) {
   // Again, we should get n or n - 1 pages.
   Page* other = memory_allocator->AllocatePage(
       faked_space.AreaSize(), static_cast<PagedSpace*>(&faked_space),
-      NOT_EXECUTABLE);
+      NOT_EXECUTABLE, new FreeListLegacy());
   total_pages++;
   faked_space.memory_chunk_list().PushBack(other);
   int page_count = 0;
@@ -739,103 +741,6 @@ TEST(ShrinkPageToHighWaterMarkTwoWordFiller) {
 
   size_t shrunk = old_space->ShrinkPageToHighWaterMark(page);
   CHECK_EQ(0u, shrunk);
-}
-
-HEAP_TEST(AllocateObjTinyFreeList) {
-  CcTest::InitializeVM();
-  Isolate* isolate = CcTest::i_isolate();
-  HandleScope scope(isolate);
-
-  heap::SealCurrentObjects(CcTest::heap());
-
-  // tinyObjPage will contain the page that contains the tiny object.
-  Page* tiny_obj_page;
-  {
-    // Allocates a tiny object (ie, that fits in the Tiny freelist).
-    // It will go at the begining of a page.
-    // Note that the handlescope is locally scoped.
-    {
-      HandleScope tiny_scope(isolate);
-      size_t tiny_obj_size =
-          (FreeList::kTinyListMax - FixedArray::kHeaderSize) / kTaggedSize;
-      Handle<FixedArray> tiny_obj = isolate->factory()->NewFixedArray(
-          static_cast<int>(tiny_obj_size), AllocationType::kOld);
-      // Remember the page of this tiny object.
-      tiny_obj_page = Page::FromHeapObject(*tiny_obj);
-    }
-
-    // Fill up the page entirely.
-    PagedSpace* old_space = CcTest::heap()->old_space();
-    int space_remaining =
-        static_cast<int>(*old_space->allocation_limit_address() -
-                         *old_space->allocation_top_address());
-    std::vector<Handle<FixedArray>> handles = heap::CreatePadding(
-        old_space->heap(), space_remaining, AllocationType::kOld);
-
-    // Checking that the new objects were indeed allocated on the same page
-    // as the tiny one.
-    CHECK_EQ(tiny_obj_page, Page::FromHeapObject(*(handles.back())));
-  }
-
-  // Call gc to reclain tinyObj (since its HandleScope went out of scope).
-  CcTest::CollectAllGarbage();
-  isolate->heap()->mark_compact_collector()->EnsureSweepingCompleted();
-  isolate->heap()->old_space()->FreeLinearAllocationArea();
-
-  // Now allocate a tyniest object.
-  // It should go at the same place as the previous one.
-  size_t tiniest_obj_size =
-      (FreeList::kTiniestListMax - FixedArray::kHeaderSize) / kTaggedSize;
-  Handle<FixedArray> tiniest_obj = isolate->factory()->NewFixedArray(
-      static_cast<int>(tiniest_obj_size), AllocationType::kOld);
-
-  // Check that the new tiny object is in the same page as the previous one.
-  Page* tiniest_obj_page = Page::FromHeapObject(*tiniest_obj);
-  CHECK_EQ(tiny_obj_page, tiniest_obj_page);
-}
-
-HEAP_TEST(EmptyFreeListCategoriesRemoved) {
-  ManualGCScope manual_gc_scope;
-  CcTest::InitializeVM();
-  Isolate* isolate = CcTest::i_isolate();
-  HandleScope scope(isolate);
-
-  heap::SealCurrentObjects(CcTest::heap());
-
-  // The maximum size for a Tiny FixedArray.
-  // (there is no specific reason for using Tiny rather than any other category)
-  constexpr size_t tiny_obj_size =
-      (FreeList::kTinyListMax - FixedArray::kHeaderSize) / kTaggedSize;
-
-  Page* tiny_obj_page;
-  {
-    // Allocate a Tiny object that will be destroyed later.
-    HandleScope tiny_scope(isolate);
-    Handle<FixedArray> tiny_obj = isolate->factory()->NewFixedArray(
-        static_cast<int>(tiny_obj_size), AllocationType::kOld);
-    tiny_obj_page = Page::FromHeapObject(*tiny_obj);
-  }
-
-  // Fill up the page entirely.
-  PagedSpace* old_space = CcTest::heap()->old_space();
-  int space_remaining =
-      static_cast<int>(*old_space->allocation_limit_address() -
-                       *old_space->allocation_top_address());
-  std::vector<Handle<FixedArray>> handles = heap::CreatePadding(
-      old_space->heap(), space_remaining, AllocationType::kOld);
-
-  // Call gc to reclaim |tiny_obj| (since its HandleScope went out of scope).
-  CcTest::CollectAllGarbage();
-  isolate->heap()->mark_compact_collector()->EnsureSweepingCompleted();
-  isolate->heap()->old_space()->FreeLinearAllocationArea();
-
-  // Allocates a new tiny_obj, which should take the place of the old one.
-  Handle<FixedArray> tiny_obj = isolate->factory()->NewFixedArray(
-      static_cast<int>(tiny_obj_size), AllocationType::kOld);
-  CHECK_EQ(tiny_obj_page, Page::FromHeapObject(*tiny_obj));
-
-  // The Tiny FreeListCategory should now be empty
-  CHECK_NULL(isolate->heap()->old_space()->free_list()->categories_[kTiny]);
 }
 
 }  // namespace heap
