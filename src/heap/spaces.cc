@@ -829,21 +829,21 @@ LargePage* LargePage::Initialize(Heap* heap, MemoryChunk* chunk,
 }
 
 void Page::AllocateFreeListCategories() {
-  for (int i = kFirstCategory; i <= free_list_->kLastCategory; i++) {
+  for (int i = kFirstCategory; i <= free_list_->kLastCategory(); i++) {
     free_list_->categories_[i] = new FreeListCategory(
         reinterpret_cast<PagedSpace*>(owner())->free_list(), this);
   }
 }
 
 void Page::InitializeFreeListCategories() {
-  for (int i = kFirstCategory; i <= free_list_->kLastCategory; i++) {
+  for (int i = kFirstCategory; i <= free_list_->kLastCategory(); i++) {
     free_list_->categories_[i]->Initialize(
         static_cast<FreeListCategoryType>(i));
   }
 }
 
 void Page::ReleaseFreeListCategories() {
-  for (int i = kFirstCategory; i <= free_list_->kLastCategory; i++) {
+  for (int i = kFirstCategory; i <= free_list_->kLastCategory(); i++) {
     if (free_list_->categories_[i] != nullptr) {
       delete free_list_->categories_[i];
       free_list_->categories_[i] = nullptr;
@@ -1734,8 +1734,8 @@ Page* PagedSpace::RemovePageSafe(int size_in_bytes) {
   // categories.
   const int minimum_category =
       static_cast<int>(free_list_->SelectFreeListCategoryType(size_in_bytes));
-  Page* page = free_list()->GetPageForCategoryType(free_list_->kLastCategory);
-  for (int cat = free_list_->kLastCategory - 1;
+  Page* page = free_list()->GetPageForCategoryType(free_list_->kLastCategory());
+  for (int cat = free_list_->kLastCategory() - 1;
        !page && cat >= minimum_category; cat--) {
     page = free_list()->GetPageForCategoryType(cat);
   }
@@ -3021,11 +3021,11 @@ void FreeListCategory::Relink() {
 
 FreeListLegacy::FreeListLegacy() {
   wasted_bytes_ = 0;
-  kNumberOfCategories = kHuge + 1;
-  kLastCategory = kHuge;
+  kNumberOfCategories_ = kHuge + 1;
+  kLastCategory_ = kHuge;
 
-  categories_ = new FreeListCategory*[kNumberOfCategories];
-  for (int i = kFirstCategory; i < kNumberOfCategories; i++) {
+  categories_ = new FreeListCategory*[kNumberOfCategories_];
+  for (int i = kFirstCategory; i < kNumberOfCategories_; i++) {
     categories_[i] = nullptr;
   }
   Reset();
@@ -3036,7 +3036,7 @@ FreeListLegacy::~FreeListLegacy() { delete[] categories_; }
 void FreeList::Reset() {
   ForAllFreeListCategories(
       [](FreeListCategory* category) { category->Reset(); });
-  for (int i = kFirstCategory; i < kNumberOfCategories; i++) {
+  for (int i = kFirstCategory; i < kNumberOfCategories_; i++) {
     categories_[i] = nullptr;
   }
   wasted_bytes_ = 0;
@@ -3104,7 +3104,7 @@ FreeSpace FreeListLegacy::Allocate(size_t size_in_bytes, size_t* node_size) {
   // size of a free list category. This operation is constant time.
   FreeListCategoryType type =
       SelectFastAllocationFreeListCategoryType(size_in_bytes);
-  for (int i = type; i < kLastCategory && node.is_null(); i++) {
+  for (int i = type; i < kHuge && node.is_null(); i++) {
     node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
                          node_size);
   }
@@ -3112,17 +3112,17 @@ FreeSpace FreeListLegacy::Allocate(size_t size_in_bytes, size_t* node_size) {
   if (node.is_null()) {
     // Next search the huge list for free list nodes. This takes linear time in
     // the number of huge elements.
-    node = SearchForNodeInList(kLastCategory, node_size, size_in_bytes);
+    node = SearchForNodeInList(kHuge, node_size, size_in_bytes);
   }
 
-  if (node.is_null() && type != kLastCategory) {
+  if (node.is_null() && type != kHuge) {
     // We didn't find anything in the huge list.
     type = SelectFreeListCategoryType(size_in_bytes);
 
-    if (type == kFirstCategory) {
+    if (type == kTiniest) {
       // For this tiniest object, the tiny list hasn't been searched yet.
       // Now searching the tiny list.
-      node = TryFindNodeIn(kFirstCategory + 1, size_in_bytes, node_size);
+      node = TryFindNodeIn(kTiny, size_in_bytes, node_size);
     }
 
     if (node.is_null()) {
@@ -3169,7 +3169,7 @@ void FreeList::RepairLists(Heap* heap) {
 
 bool FreeList::AddCategory(FreeListCategory* category) {
   FreeListCategoryType type = category->type_;
-  DCHECK_LT(type, kNumberOfCategories);
+  DCHECK_LT(type, kNumberOfCategories_);
   FreeListCategory* top = categories_[type];
 
   if (category->is_empty()) return false;
@@ -3186,7 +3186,7 @@ bool FreeList::AddCategory(FreeListCategory* category) {
 
 void FreeList::RemoveCategory(FreeListCategory* category) {
   FreeListCategoryType type = category->type_;
-  DCHECK_LT(type, kNumberOfCategories);
+  DCHECK_LT(type, kNumberOfCategories_);
   FreeListCategory* top = categories_[type];
 
   // Common double-linked list removal.
@@ -3216,7 +3216,7 @@ void FreeList::PrintCategories(FreeListCategoryType type) {
 
 int MemoryChunk::FreeListsLength() {
   int length = 0;
-  for (int cat = kFirstCategory; cat <= free_list_->kLastCategory; cat++) {
+  for (int cat = kFirstCategory; cat <= free_list_->kLastCategory(); cat++) {
     if (free_list_->categories_[cat] != nullptr) {
       length += free_list_->categories_[cat]->FreeListLength();
     }
@@ -3241,7 +3241,7 @@ size_t FreeListCategory::SumFreeList() {
 #ifdef DEBUG
 bool FreeList::IsVeryLong() {
   int len = 0;
-  for (int i = kFirstCategory; i < kNumberOfCategories; i++) {
+  for (int i = kFirstCategory; i < kNumberOfCategories_; i++) {
     FreeListCategoryIterator it(this, static_cast<FreeListCategoryType>(i));
     while (it.HasNext()) {
       len += it.Next()->FreeListLength();
@@ -3394,7 +3394,7 @@ void ReadOnlyPage::MakeHeaderRelocatable() {
   // Detached read-only space needs to have a valid marking bitmap and free list
   // categories. Instruct Lsan to ignore them if required.
   LSAN_IGNORE_OBJECT(marking_bitmap_);
-  for (int i = kFirstCategory; i < free_list_->kNumberOfCategories; i++) {
+  for (int i = kFirstCategory; i < free_list_->kNumberOfCategories(); i++) {
     LSAN_IGNORE_OBJECT(free_list_->categories_[i]);
   }
   heap_ = nullptr;
