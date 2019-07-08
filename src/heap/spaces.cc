@@ -1405,6 +1405,7 @@ void MemoryChunk::ReleaseAllAllocatedMemory() {
     Page* page = static_cast<Page*>(this);
     page->ReleaseFreeListCategories();
   }
+  delete free_list_;
 }
 
 static SlotSet* AllocateAndInitializeSlotSet(size_t size, Address page_start) {
