@@ -238,9 +238,6 @@ class FreeList {
 
   virtual ~FreeList() {}
 
-  // Creates a new free list of the same type as this one.
-  virtual FreeList* MakeNew() = 0;
-
   virtual size_t GuaranteedAllocatable(size_t maximum_freed) = 0;
   virtual size_t Free(Address start, size_t size_in_bytes, FreeMode mode) = 0;
   virtual V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
@@ -348,8 +345,6 @@ class FreeList {
 // (only the LargeObject space for now).
 class NoFreeList : public FreeList {
  public:
-  virtual FreeList* MakeNew() { return new NoFreeList(); }
-
   virtual size_t GuaranteedAllocatable(size_t maximum_freed) {
     FATAL("NoFreeList can't be used as a standard FreeList. ");
   }
@@ -1946,8 +1941,6 @@ class AllocationStats {
 class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
  public:
   enum { kTiniest, kTiny, kSmall, kMedium, kLarge, kHuge };
-
-  virtual FreeList* MakeNew() { return new FreeListLegacy(); }
 
   // This method returns how much memory can be allocated after freeing
   // maximum_freed memory.
