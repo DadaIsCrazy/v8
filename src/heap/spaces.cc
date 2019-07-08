@@ -829,21 +829,21 @@ LargePage* LargePage::Initialize(Heap* heap, MemoryChunk* chunk,
 }
 
 void Page::AllocateFreeListCategories() {
-  for (int i = kFirstCategory; i < free_list_->kNumberOfCategories; i++) {
+  for (int i = kFirstCategory; i <= free_list_->kLastCategory; i++) {
     free_list_->categories_[i] = new FreeListCategory(
         reinterpret_cast<PagedSpace*>(owner())->free_list(), this);
   }
 }
 
 void Page::InitializeFreeListCategories() {
-  for (int i = kFirstCategory; i < free_list_->kNumberOfCategories; i++) {
+  for (int i = kFirstCategory; i <= free_list_->kLastCategory; i++) {
     free_list_->categories_[i]->Initialize(
         static_cast<FreeListCategoryType>(i));
   }
 }
 
 void Page::ReleaseFreeListCategories() {
-  for (int i = kFirstCategory; i < free_list_->kNumberOfCategories; i++) {
+  for (int i = kFirstCategory; i <= free_list_->kLastCategory; i++) {
     if (free_list_->categories_[i] != nullptr) {
       delete free_list_->categories_[i];
       free_list_->categories_[i] = nullptr;
@@ -3014,20 +3014,10 @@ void FreeListCategory::Relink() {
   owner()->AddCategory(this);
 }
 
-const int FreeListLegacy::kNumberOfCategories_ = 6;
-const int FreeListLegacy::kLastCategory_ =
-    FreeListLegacy::kNumberOfCategories_ - 1;
-
-const size_t FreeListLegacy::kCategoriesMax[6] = {
-    0xa * kTaggedSize,    0x1f * kTaggedSize,
-    0xff * kTaggedSize,   0x7ff * kTaggedSize,
-    0x1fff * kTaggedSize, static_cast<size_t>(Page::kPageSize)};
-
 FreeListLegacy::FreeListLegacy() {
   wasted_bytes_ = 0;
-
-  kNumberOfCategories = kNumberOfCategories_;
-  kLastCategory = kLastCategory_;
+  kNumberOfCategories = kHuge + 1;
+  kLastCategory = kHuge;
 
   categories_ = new FreeListCategory*[kNumberOfCategories];
   for (int i = kFirstCategory; i < kNumberOfCategories; i++) {

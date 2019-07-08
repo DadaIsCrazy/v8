@@ -374,9 +374,8 @@ int Sweeper::RawSweep(Page* p, FreeListRebuildingMode free_list_mode,
   p->MarkSwept();
   DCHECK(p->SweepingDone());
 
-  // return
-  // static_cast<int>(p->free_list_->GuaranteedAllocatable(max_freed_bytes));
-  return static_cast<int>(max_freed_bytes);
+  return static_cast<int>(
+      p->free_list()->GuaranteedAllocatable(max_freed_bytes));
 }
 
 void Sweeper::SweepSpaceFromTask(AllocationSpace identity) {

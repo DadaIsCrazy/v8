@@ -343,6 +343,7 @@ class FreeList {
 };
 
 class NoFreeList : public FreeList {
+ public:
   virtual FreeList* MakeNew() { return new NoFreeList(); }
 
   virtual size_t GuaranteedAllocatable(size_t maximum_freed) {
@@ -1085,6 +1086,8 @@ class Page : public MemoryChunk {
     DCHECK_GE(allocated_bytes(), bytes);
     allocated_bytes_ -= bytes;
   }
+
+  FreeList* free_list() { return free_list_; }
 
   void ResetAllocationStatistics();
 
@@ -1942,35 +1945,43 @@ class AllocationStats {
 //   larger. Empty pages are also added to this list.
 class FreeListLegacy : public FreeList {
  public:
-  static const int kNumberOfCategories_;
-  static const FreeListCategoryType kLastCategory_;
-
-  static const size_t kCategoriesMax[6];
+  enum { kTiniest, kTiny, kSmall, kMedium, kLarge, kHuge };
 
   virtual FreeList* MakeNew() { return new FreeListLegacy(); }
 
   // This method returns how much memory can be allocated after freeing
   // maximum_freed memory.
   virtual size_t GuaranteedAllocatable(size_t maximum_freed) {
-    if (maximum_freed <= kCategoriesMax[0]) {
+    if (maximum_freed <= kTiniestListMax) {
+      // Since we are not iterating over all list entries, we cannot guarantee
+      // that we can find the maximum freed block in that free list.
       return 0;
-    }
-    for (int cat = kFirstCategory + 1; cat < kLastCategory; cat++) {
-      if (maximum_freed <= kCategoriesMax[cat]) {
-        return kCategoriesMax[cat - 1];
-      }
+    } else if (maximum_freed <= kTinyListMax) {
+      return kTinyAllocationMax;
+    } else if (maximum_freed <= kSmallListMax) {
+      return kSmallAllocationMax;
+    } else if (maximum_freed <= kMediumListMax) {
+      return kMediumAllocationMax;
+    } else if (maximum_freed <= kLargeListMax) {
+      return kLargeAllocationMax;
     }
     return maximum_freed;
   }
 
   virtual FreeListCategoryType SelectFreeListCategoryType(
       size_t size_in_bytes) {
-    for (int cat = kFirstCategory; cat < kLastCategory; cat++) {
-      if (size_in_bytes <= kCategoriesMax[cat]) {
-        return cat;
-      }
+    if (size_in_bytes <= kTiniestListMax) {
+      return kTiniest;
+    } else if (size_in_bytes <= kTinyListMax) {
+      return kTiny;
+    } else if (size_in_bytes <= kSmallListMax) {
+      return kSmall;
+    } else if (size_in_bytes <= kMediumListMax) {
+      return kMedium;
+    } else if (size_in_bytes <= kLargeListMax) {
+      return kLarge;
     }
-    return kLastCategory;
+    return kHuge;
   }
 
   FreeListLegacy();
@@ -1998,6 +2009,16 @@ class FreeListLegacy : public FreeList {
   // padding and alignment of data and code pages into account.
   static const size_t kMaxBlockSize = Page::kPageSize;
 
+  static const size_t kTiniestListMax = 0xa * kTaggedSize;
+  static const size_t kTinyListMax = 0x1f * kTaggedSize;
+  static const size_t kSmallListMax = 0xff * kTaggedSize;
+  static const size_t kMediumListMax = 0x7ff * kTaggedSize;
+  static const size_t kLargeListMax = 0x1fff * kTaggedSize;
+  static const size_t kTinyAllocationMax = kTiniestListMax;
+  static const size_t kSmallAllocationMax = kTinyListMax;
+  static const size_t kMediumAllocationMax = kSmallListMax;
+  static const size_t kLargeAllocationMax = kMediumListMax;
+
   // Tries to retrieve a node from the first category in a given |type|.
   // Returns nullptr if the category is empty or the top entry is smaller
   // than minimum_size.
@@ -2011,12 +2032,14 @@ class FreeListLegacy : public FreeList {
   // The tiny categories are not used for fast allocation.
   FreeListCategoryType SelectFastAllocationFreeListCategoryType(
       size_t size_in_bytes) {
-    for (int cat = 2; cat < kLastCategory; cat++) {
-      if (size_in_bytes <= kCategoriesMax[cat]) {
-        return cat;
-      }
+    if (size_in_bytes <= kSmallAllocationMax) {
+      return kSmall;
+    } else if (size_in_bytes <= kMediumAllocationMax) {
+      return kMedium;
+    } else if (size_in_bytes <= kLargeAllocationMax) {
+      return kLarge;
     }
-    return kLastCategory;
+    return kHuge;
   }
 
   friend class FreeListCategory;
