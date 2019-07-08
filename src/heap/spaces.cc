@@ -1719,15 +1719,7 @@ void PagedSpace::RefineAllocatedBytesAfterSweeping(Page* page) {
 
 Page* PagedSpace::RemovePageSafe(int size_in_bytes) {
   base::MutexGuard guard(mutex());
-  // Check for pages that still contain free list entries. Bail out for smaller
-  // categories.
-  const int minimum_category =
-      static_cast<int>(free_list_->SelectFreeListCategoryType(size_in_bytes));
-  Page* page = free_list()->GetPageForCategoryType(free_list_->kLastCategory());
-  for (int cat = free_list_->kLastCategory() - 1;
-       !page && cat >= minimum_category; cat--) {
-    page = free_list()->GetPageForCategoryType(cat);
-  }
+  Page* page = free_list()->GetPageForSize(size_in_bytes);
   if (!page) return nullptr;
   RemovePage(page);
   return page;

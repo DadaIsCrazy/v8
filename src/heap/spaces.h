@@ -242,11 +242,13 @@ class FreeList {
   virtual FreeList* MakeNew() = 0;
 
   virtual size_t GuaranteedAllocatable(size_t maximum_freed) = 0;
-  virtual FreeListCategoryType SelectFreeListCategoryType(
-      size_t size_in_bytes) = 0;
   virtual size_t Free(Address start, size_t size_in_bytes, FreeMode mode) = 0;
   virtual V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                                    size_t* node_size) = 0;
+
+  // Returns a page containing an entry for a given type, or nullptr otherwise.
+  virtual Page* GetPageForSize(size_t size_in_bytes);
+
   void Reset();
 
   // Return the number of bytes available on the free list.
@@ -294,9 +296,6 @@ class FreeList {
   bool AddCategory(FreeListCategory* category);
   V8_EXPORT_PRIVATE void RemoveCategory(FreeListCategory* category);
   void PrintCategories(FreeListCategoryType type);
-
-  // Returns a page containing an entry for a given type, or nullptr otherwise.
-  inline Page* GetPageForCategoryType(FreeListCategoryType type);
 
 #ifdef DEBUG
   size_t SumFreeLists();
@@ -354,16 +353,15 @@ class NoFreeList : public FreeList {
   virtual size_t GuaranteedAllocatable(size_t maximum_freed) {
     FATAL("NoFreeList can't be used as a standard FreeList. ");
   }
-  virtual FreeListCategoryType SelectFreeListCategoryType(
-      size_t size_in_bytes) {
-    FATAL("NoFreeList can't be used as a standard FreeList. ");
-  }
   virtual size_t Free(Address start, size_t size_in_bytes, FreeMode mode) {
     FATAL("NoFreeList can't be used as a standard FreeList.");
   }
   virtual V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                                    size_t* node_size) {
     FATAL("NoFreeList can't be usedr as a standard FreeList.");
+  }
+  virtual Page* GetPageForSize(size_t size_in_bytes) {
+    FATAL("NoFreeList can't be used as a standard FreeList.");
   }
 };
 
@@ -1986,6 +1984,23 @@ class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
     return kHuge;
   }
 
+  virtual Page* GetPageForSize(size_t size_in_bytes) {
+    const int minimum_category =
+        static_cast<int>(SelectFreeListCategoryType(size_in_bytes));
+    Page* page = GetPageForCategoryType(kHuge);
+    if (!page && static_cast<int>(kLarge) >= minimum_category)
+      page = GetPageForCategoryType(kLarge);
+    if (!page && static_cast<int>(kMedium) >= minimum_category)
+      page = GetPageForCategoryType(kMedium);
+    if (!page && static_cast<int>(kSmall) >= minimum_category)
+      page = GetPageForCategoryType(kSmall);
+    if (!page && static_cast<int>(kTiny) >= minimum_category)
+      page = GetPageForCategoryType(kTiny);
+    if (!page && static_cast<int>(kTiniest) >= minimum_category)
+      page = GetPageForCategoryType(kTiniest);
+    return page;
+  }
+
   FreeListLegacy();
   ~FreeListLegacy();
 
@@ -2042,6 +2057,10 @@ class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
       return kLarge;
     }
     return kHuge;
+  }
+
+  Page* GetPageForCategoryType(FreeListCategoryType type) {
+    return top(type) ? top(type)->page() : nullptr;
   }
 
   friend class FreeListCategory;

@@ -322,10 +322,6 @@ MemoryChunk* OldGenerationMemoryChunkIterator::next() {
   UNREACHABLE();
 }
 
-Page* FreeList::GetPageForCategoryType(FreeListCategoryType type) {
-  return top(type) ? top(type)->page() : nullptr;
-}
-
 FreeList* FreeListCategory::owner() { return free_list_; }
 
 bool FreeListCategory::is_linked() {
