@@ -371,9 +371,6 @@ int Sweeper::RawSweep(Page* p, FreeListRebuildingMode free_list_mode,
   if (code_object_registry) code_object_registry->Finalize();
   if (free_list_mode == IGNORE_FREE_LIST) return 0;
 
-  p->MarkSwept();
-  DCHECK(p->SweepingDone());
-
   return static_cast<int>(
       p->free_list()->GuaranteedAllocatable(max_freed_bytes));
 }
