@@ -1944,7 +1944,7 @@ class AllocationStats {
 //   words in size.
 // At least 16384 words (huge): This list is for objects of 2048 words or
 //   larger. Empty pages are also added to this list.
-class FreeListLegacy : public FreeList {
+class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
  public:
   enum { kTiniest, kTiny, kSmall, kMedium, kLarge, kHuge };
 
