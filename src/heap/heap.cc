@@ -516,9 +516,9 @@ void Heap::PrintFreeListsStats() {
   }
 
   std::vector<int> categories_lengths(
-      old_space()->free_list()->kNumberOfCategories, 0);
+      old_space()->free_list()->kNumberOfCategories(), 0);
   std::vector<size_t> categories_sums(
-      old_space()->free_list()->kNumberOfCategories, 0);
+      old_space()->free_list()->kNumberOfCategories(), 0);
   unsigned int pageCnt = 0;
 
   // This loops computes freelists lengths and sum.
@@ -532,7 +532,7 @@ void Heap::PrintFreeListsStats() {
     }
 
     for (int cat = kFirstCategory;
-         cat <= old_space()->free_list()->kLastCategory; cat++) {
+         cat <= old_space()->free_list()->kLastCategory(); cat++) {
       FreeListCategory* free_list =
           page->free_list_category(static_cast<FreeListCategoryType>(cat));
       int length = free_list->FreeListLength();
@@ -541,7 +541,7 @@ void Heap::PrintFreeListsStats() {
       if (FLAG_trace_gc_freelists_verbose) {
         out_str << "[" << cat << ": " << std::setw(4) << length << " || "
                 << std::setw(6) << sum << " ]"
-                << (cat == old_space()->free_list()->kLastCategory ? "\n"
+                << (cat == old_space()->free_list()->kLastCategory() ? "\n"
                                                                    : ", ");
       }
       categories_lengths[cat] += length;
@@ -571,12 +571,12 @@ void Heap::PrintFreeListsStats() {
                "FreeLists global statistics: "
                "[category: length || total free KB]\n");
   std::ostringstream out_str;
-  for (int cat = kFirstCategory; cat <= old_space()->free_list()->kLastCategory;
+  for (int cat = kFirstCategory; cat <= old_space()->free_list()->kLastCategory();
        cat++) {
     out_str << "[" << cat << ": " << categories_lengths[cat] << " || "
             << std::fixed << std::setprecision(2)
             << static_cast<double>(categories_sums[cat]) / KB << " KB]"
-            << (cat == old_space()->free_list()->kLastCategory ? "\n" : ", ");
+            << (cat == old_space()->free_list()->kLastCategory() ? "\n" : ", ");
   }
   PrintIsolate(isolate_, "%s", out_str.str().c_str());
 }

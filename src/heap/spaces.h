@@ -233,8 +233,8 @@ class FreeListCategory {
 // categories would scatter allocation more.
 class FreeList {
  public:
-  int kNumberOfCategories;
-  FreeListCategoryType kLastCategory;
+  int kNumberOfCategories() { return kNumberOfCategories_; }
+  FreeListCategoryType kLastCategory() { return kLastCategory_; }
 
   virtual ~FreeList() {}
 
@@ -286,7 +286,7 @@ class FreeList {
 
   template <typename Callback>
   void ForAllFreeListCategories(Callback callback) {
-    for (int i = kFirstCategory; i < kNumberOfCategories; i++) {
+    for (int i = kFirstCategory; i < kNumberOfCategories(); i++) {
       ForAllFreeListCategories(static_cast<FreeListCategoryType>(i), callback);
     }
   }
@@ -304,6 +304,9 @@ class FreeList {
 #endif
 
  protected:
+  int kNumberOfCategories_;
+  FreeListCategoryType kLastCategory_;
+
   class FreeListCategoryIterator {
    public:
     FreeListCategoryIterator(FreeList* free_list, FreeListCategoryType type)
@@ -1035,7 +1038,7 @@ class Page : public MemoryChunk {
 
   template <typename Callback>
   inline void ForAllFreeListCategories(Callback callback) {
-    for (int i = kFirstCategory; i < free_list_->kNumberOfCategories; i++) {
+    for (int i = kFirstCategory; i < free_list_->kNumberOfCategories(); i++) {
       callback(free_list_->categories_[i]);
     }
   }
