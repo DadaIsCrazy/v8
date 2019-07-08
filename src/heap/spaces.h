@@ -367,6 +367,157 @@ class NoFreeList : public FreeList {
   }
 };
 
+// ----------------------------------------------------------------------------
+// Space is the abstract superclass for all allocation spaces.
+class V8_EXPORT_PRIVATE Space : public Malloced {
+ public:
+  Space(Heap* heap, AllocationSpace id, FreeList* free_list)
+      : allocation_observers_paused_(false),
+        heap_(heap),
+        id_(id),
+        committed_(0),
+        max_committed_(0),
+        free_list_(free_list) {
+    external_backing_store_bytes_ =
+        new std::atomic<size_t>[ExternalBackingStoreType::kNumTypes];
+    external_backing_store_bytes_[ExternalBackingStoreType::kArrayBuffer] = 0;
+    external_backing_store_bytes_[ExternalBackingStoreType::kExternalString] =
+        0;
+    CheckOffsetsAreConsistent();
+  }
+
+  void CheckOffsetsAreConsistent() const;
+
+  static inline void MoveExternalBackingStoreBytes(
+      ExternalBackingStoreType type, Space* from, Space* to, size_t amount);
+
+  virtual ~Space() {
+    delete[] external_backing_store_bytes_;
+    external_backing_store_bytes_ = nullptr;
+    delete free_list_;
+  }
+
+  Heap* heap() const {
+    DCHECK_NOT_NULL(heap_);
+    return heap_;
+  }
+
+  bool IsDetached() const { return heap_ == nullptr; }
+
+  AllocationSpace identity() { return id_; }
+
+  const char* name() { return Heap::GetSpaceName(id_); }
+
+  virtual void AddAllocationObserver(AllocationObserver* observer);
+
+  virtual void RemoveAllocationObserver(AllocationObserver* observer);
+
+  virtual void PauseAllocationObservers();
+
+  virtual void ResumeAllocationObservers();
+
+  virtual void StartNextInlineAllocationStep() {}
+
+  void AllocationStep(int bytes_since_last, Address soon_object, int size);
+
+  // Return the total amount committed memory for this space, i.e., allocatable
+  // memory and page headers.
+  virtual size_t CommittedMemory() { return committed_; }
+
+  virtual size_t MaximumCommittedMemory() { return max_committed_; }
+
+  // Returns allocated size.
+  virtual size_t Size() = 0;
+
+  // Returns size of objects. Can differ from the allocated size
+  // (e.g. see LargeObjectSpace).
+  virtual size_t SizeOfObjects() { return Size(); }
+
+  // Approximate amount of physical memory committed for this space.
+  virtual size_t CommittedPhysicalMemory() = 0;
+
+  // Return the available bytes without growing.
+  virtual size_t Available() = 0;
+
+  virtual int RoundSizeDownToObjectAlignment(int size) {
+    if (id_ == CODE_SPACE) {
+      return RoundDown(size, kCodeAlignment);
+    } else {
+      return RoundDown(size, kTaggedSize);
+    }
+  }
+
+  virtual std::unique_ptr<ObjectIterator> GetObjectIterator() = 0;
+
+  void AccountCommitted(size_t bytes) {
+    DCHECK_GE(committed_ + bytes, committed_);
+    committed_ += bytes;
+    if (committed_ > max_committed_) {
+      max_committed_ = committed_;
+    }
+  }
+
+  void AccountUncommitted(size_t bytes) {
+    DCHECK_GE(committed_, committed_ - bytes);
+    committed_ -= bytes;
+  }
+
+  inline void IncrementExternalBackingStoreBytes(ExternalBackingStoreType type,
+                                                 size_t amount);
+
+  inline void DecrementExternalBackingStoreBytes(ExternalBackingStoreType type,
+                                                 size_t amount);
+
+  // Returns amount of off-heap memory in-use by objects in this Space.
+  virtual size_t ExternalBackingStoreBytes(
+      ExternalBackingStoreType type) const {
+    return external_backing_store_bytes_[type];
+  }
+
+  void* GetRandomMmapAddr();
+
+  MemoryChunk* first_page() { return memory_chunk_list_.front(); }
+  MemoryChunk* last_page() { return memory_chunk_list_.back(); }
+
+  base::List<MemoryChunk>& memory_chunk_list() { return memory_chunk_list_; }
+
+  FreeList* free_list() { return free_list_; }
+
+#ifdef DEBUG
+  virtual void Print() = 0;
+#endif
+
+ protected:
+  intptr_t GetNextInlineAllocationStepSize();
+  bool AllocationObserversActive() {
+    return !allocation_observers_paused_ && !allocation_observers_.empty();
+  }
+
+  void DetachFromHeap() { heap_ = nullptr; }
+
+  std::vector<AllocationObserver*> allocation_observers_;
+
+  // The List manages the pages that belong to the given space.
+  base::List<MemoryChunk> memory_chunk_list_;
+
+  // Tracks off-heap memory used by this space.
+  std::atomic<size_t>* external_backing_store_bytes_;
+
+  static const intptr_t kIdOffset = 9 * kSystemPointerSize;
+
+  bool allocation_observers_paused_;
+  Heap* heap_;
+  AllocationSpace id_;
+
+  // Keeps track of committed memory in a space.
+  size_t committed_;
+  size_t max_committed_;
+
+  FreeList* free_list_;
+
+  DISALLOW_COPY_AND_ASSIGN(Space);
+};
+
 // The CodeObjectRegistry holds all start addresses of code objects of a given
 // MemoryChunk. Each MemoryChunk owns a separate CodeObjectRegistry. The
 // CodeObjectRegistry allows fast lookup from an inner pointer of a code object
@@ -555,7 +706,7 @@ class MemoryChunk {
       + kSizetSize              // size_t allocated_bytes_
       + kSizetSize              // size_t wasted_memory_
       + kSystemPointerSize * 2  // base::ListNode
-      + kSystemPointerSize      // FreeList* freelist_
+      + kSystemPointerSize      // FreeListCategory** categories__
       + kSystemPointerSize      // LocalArrayBufferTracker* local_tracker_
       + kIntptrSize  // std::atomic<intptr_t> young_generation_live_byte_count_
       + kSystemPointerSize   // Bitmap* young_generation_bitmap_
@@ -853,12 +1004,13 @@ class MemoryChunk {
 
   CodeObjectRegistry* GetCodeObjectRegistry() { return code_object_registry_; }
 
+  FreeList* free_list() { return owner()->free_list(); }
+
  protected:
   static MemoryChunk* Initialize(Heap* heap, Address base, size_t size,
                                  Address area_start, Address area_end,
                                  Executability executable, Space* owner,
-                                 VirtualMemory reservation,
-                                 FreeList* free_list);
+                                 VirtualMemory reservation);
 
   // Release all memory allocated by the chunk. Should be called when memory
   // chunk is about to be freed.
@@ -957,7 +1109,7 @@ class MemoryChunk {
 
   base::ListNode<MemoryChunk> list_node_;
 
-  FreeList* free_list_;
+  FreeListCategory** categories_;
 
   LocalArrayBufferTracker* local_tracker_;
 
@@ -1038,8 +1190,8 @@ class Page : public MemoryChunk {
 
   template <typename Callback>
   inline void ForAllFreeListCategories(Callback callback) {
-    for (int i = kFirstCategory; i < free_list_->kNumberOfCategories(); i++) {
-      callback(free_list_->categories_[i]);
+    for (int i = kFirstCategory; i < free_list()->kNumberOfCategories(); i++) {
+      callback(categories_[i]);
     }
   }
 
@@ -1075,7 +1227,7 @@ class Page : public MemoryChunk {
   }
 
   FreeListCategory* free_list_category(FreeListCategoryType type) {
-    return free_list_->categories_[type];
+    return categories_[type];
   }
 
   size_t wasted_memory() { return wasted_memory_; }
@@ -1090,8 +1242,6 @@ class Page : public MemoryChunk {
     DCHECK_GE(allocated_bytes(), bytes);
     allocated_bytes_ -= bytes;
   }
-
-  FreeList* free_list() { return free_list_; }
 
   void ResetAllocationStatistics();
 
@@ -1151,153 +1301,6 @@ class LargePage : public MemoryChunk {
                                Executability executable);
 
   friend class MemoryAllocator;
-};
-
-
-// ----------------------------------------------------------------------------
-// Space is the abstract superclass for all allocation spaces.
-class V8_EXPORT_PRIVATE Space : public Malloced {
- public:
-  Space(Heap* heap, AllocationSpace id)
-      : allocation_observers_paused_(false),
-        heap_(heap),
-        id_(id),
-        committed_(0),
-        max_committed_(0) {
-    external_backing_store_bytes_ =
-        new std::atomic<size_t>[ExternalBackingStoreType::kNumTypes];
-    external_backing_store_bytes_[ExternalBackingStoreType::kArrayBuffer] = 0;
-    external_backing_store_bytes_[ExternalBackingStoreType::kExternalString] =
-        0;
-    CheckOffsetsAreConsistent();
-  }
-
-  void CheckOffsetsAreConsistent() const;
-
-  static inline void MoveExternalBackingStoreBytes(
-      ExternalBackingStoreType type, Space* from, Space* to, size_t amount);
-
-  virtual ~Space() {
-    delete[] external_backing_store_bytes_;
-    external_backing_store_bytes_ = nullptr;
-  }
-
-  Heap* heap() const {
-    DCHECK_NOT_NULL(heap_);
-    return heap_;
-  }
-
-  bool IsDetached() const { return heap_ == nullptr; }
-
-  AllocationSpace identity() { return id_; }
-
-  const char* name() { return Heap::GetSpaceName(id_); }
-
-  virtual void AddAllocationObserver(AllocationObserver* observer);
-
-  virtual void RemoveAllocationObserver(AllocationObserver* observer);
-
-  virtual void PauseAllocationObservers();
-
-  virtual void ResumeAllocationObservers();
-
-  virtual void StartNextInlineAllocationStep() {}
-
-  void AllocationStep(int bytes_since_last, Address soon_object, int size);
-
-  // Return the total amount committed memory for this space, i.e., allocatable
-  // memory and page headers.
-  virtual size_t CommittedMemory() { return committed_; }
-
-  virtual size_t MaximumCommittedMemory() { return max_committed_; }
-
-  // Returns allocated size.
-  virtual size_t Size() = 0;
-
-  // Returns size of objects. Can differ from the allocated size
-  // (e.g. see LargeObjectSpace).
-  virtual size_t SizeOfObjects() { return Size(); }
-
-  // Approximate amount of physical memory committed for this space.
-  virtual size_t CommittedPhysicalMemory() = 0;
-
-  // Return the available bytes without growing.
-  virtual size_t Available() = 0;
-
-  virtual int RoundSizeDownToObjectAlignment(int size) {
-    if (id_ == CODE_SPACE) {
-      return RoundDown(size, kCodeAlignment);
-    } else {
-      return RoundDown(size, kTaggedSize);
-    }
-  }
-
-  virtual std::unique_ptr<ObjectIterator> GetObjectIterator() = 0;
-
-  void AccountCommitted(size_t bytes) {
-    DCHECK_GE(committed_ + bytes, committed_);
-    committed_ += bytes;
-    if (committed_ > max_committed_) {
-      max_committed_ = committed_;
-    }
-  }
-
-  void AccountUncommitted(size_t bytes) {
-    DCHECK_GE(committed_, committed_ - bytes);
-    committed_ -= bytes;
-  }
-
-  inline void IncrementExternalBackingStoreBytes(ExternalBackingStoreType type,
-                                                 size_t amount);
-
-  inline void DecrementExternalBackingStoreBytes(ExternalBackingStoreType type,
-                                                 size_t amount);
-
-  // Returns amount of off-heap memory in-use by objects in this Space.
-  virtual size_t ExternalBackingStoreBytes(
-      ExternalBackingStoreType type) const {
-    return external_backing_store_bytes_[type];
-  }
-
-  void* GetRandomMmapAddr();
-
-  MemoryChunk* first_page() { return memory_chunk_list_.front(); }
-  MemoryChunk* last_page() { return memory_chunk_list_.back(); }
-
-  base::List<MemoryChunk>& memory_chunk_list() { return memory_chunk_list_; }
-
-#ifdef DEBUG
-  virtual void Print() = 0;
-#endif
-
- protected:
-  intptr_t GetNextInlineAllocationStepSize();
-  bool AllocationObserversActive() {
-    return !allocation_observers_paused_ && !allocation_observers_.empty();
-  }
-
-  void DetachFromHeap() { heap_ = nullptr; }
-
-  std::vector<AllocationObserver*> allocation_observers_;
-
-  // The List manages the pages that belong to the given space.
-  base::List<MemoryChunk> memory_chunk_list_;
-
-  // Tracks off-heap memory used by this space.
-  std::atomic<size_t>* external_backing_store_bytes_;
-
- private:
-  static const intptr_t kIdOffset = 9 * kSystemPointerSize;
-
-  bool allocation_observers_paused_;
-  Heap* heap_;
-  AllocationSpace id_;
-
-  // Keeps track of committed memory in a space.
-  size_t committed_;
-  size_t max_committed_;
-
-  DISALLOW_COPY_AND_ASSIGN(Space);
 };
 
 class MemoryChunkValidator {
@@ -1470,8 +1473,7 @@ class MemoryAllocator {
   template <MemoryAllocator::AllocationMode alloc_mode = kRegular,
             typename SpaceType>
   EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE)
-  Page* AllocatePage(size_t size, SpaceType* owner, Executability executable,
-                     FreeList* free_list);
+  Page* AllocatePage(size_t size, SpaceType* owner, Executability executable);
 
   LargePage* AllocateLargePage(size_t size, LargeObjectSpace* owner,
                                Executability executable);
@@ -1505,8 +1507,7 @@ class MemoryAllocator {
   V8_EXPORT_PRIVATE MemoryChunk* AllocateChunk(size_t reserve_area_size,
                                                size_t commit_area_size,
                                                Executability executable,
-                                               Space* space,
-                                               FreeList* free_list);
+                                               Space* space);
 
   Address AllocateAlignedMemory(size_t reserve_size, size_t commit_size,
                                 size_t alignment, Executability executable,
@@ -1591,7 +1592,7 @@ class MemoryAllocator {
   // See AllocatePage for public interface. Note that currently we only support
   // pools for NOT_EXECUTABLE pages of size MemoryChunk::kPageSize.
   template <typename SpaceType>
-  MemoryChunk* AllocatePagePooled(SpaceType* owner, FreeList* free_list);
+  MemoryChunk* AllocatePagePooled(SpaceType* owner);
 
   // Initializes pages in a chunk. Returns the first page address.
   // This function and GetChunkId() are provided for the mark-compact
@@ -1695,16 +1696,13 @@ class MemoryAllocator {
 
 extern template EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE)
     Page* MemoryAllocator::AllocatePage<MemoryAllocator::kRegular, PagedSpace>(
-        size_t size, PagedSpace* owner, Executability executable,
-        FreeList* free_list);
+        size_t size, PagedSpace* owner, Executability executable);
 extern template EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE)
     Page* MemoryAllocator::AllocatePage<MemoryAllocator::kRegular, SemiSpace>(
-        size_t size, SemiSpace* owner, Executability executable,
-        FreeList* free_list);
+        size_t size, SemiSpace* owner, Executability executable);
 extern template EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE)
     Page* MemoryAllocator::AllocatePage<MemoryAllocator::kPooled, SemiSpace>(
-        size_t size, SemiSpace* owner, Executability executable,
-        FreeList* free_list);
+        size_t size, SemiSpace* owner, Executability executable);
 
 extern template EXPORT_TEMPLATE_DECLARE(
     V8_EXPORT_PRIVATE) void MemoryAllocator::
@@ -2113,8 +2111,8 @@ class LocalAllocationBuffer {
 
 class SpaceWithLinearArea : public Space {
  public:
-  SpaceWithLinearArea(Heap* heap, AllocationSpace id)
-      : Space(heap, id), top_on_previous_step_(0) {
+  SpaceWithLinearArea(Heap* heap, AllocationSpace id, FreeList* free_list)
+      : Space(heap, id, free_list), top_on_previous_step_(0) {
     allocation_info_.Reset(kNullAddress, kNullAddress);
   }
 
@@ -2176,7 +2174,7 @@ class V8_EXPORT_PRIVATE PagedSpace
 
   // Creates a space with an id.
   PagedSpace(Heap* heap, AllocationSpace id, Executability executable,
-             FreeList* free_list_);
+             FreeList* free_list);
 
   ~PagedSpace() override { TearDown(); }
 
@@ -2360,8 +2358,6 @@ class V8_EXPORT_PRIVATE PagedSpace
   // sweeper.
   virtual void RefillFreeList();
 
-  FreeList* free_list() { return free_list_; }
-
   base::Mutex* mutex() { return &space_mutex_; }
 
   inline void UnlinkFreeListCategories(Page* page);
@@ -2453,9 +2449,6 @@ class V8_EXPORT_PRIVATE PagedSpace
   // Accounting information for this space.
   AllocationStats accounting_stats_;
 
-  // The space's free list.
-  FreeList* free_list_;
-
   // Mutex guarding any concurrent access to the space.
   base::Mutex space_mutex_;
 
@@ -2481,7 +2474,7 @@ class SemiSpace : public Space {
   static void Swap(SemiSpace* from, SemiSpace* to);
 
   SemiSpace(Heap* heap, SemiSpaceId semispace)
-      : Space(heap, NEW_SPACE),
+      : Space(heap, NEW_SPACE, new FreeListLegacy()),
         current_capacity_(0),
         maximum_capacity_(0),
         minimum_capacity_(0),

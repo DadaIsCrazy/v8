@@ -110,9 +110,8 @@ static void VerifyMemoryChunk(Isolate* isolate, Heap* heap,
   size_t guard_size =
       (executable == EXECUTABLE) ? MemoryChunkLayout::CodePageGuardSize() : 0;
 
-  MemoryChunk* memory_chunk =
-      memory_allocator->AllocateChunk(reserve_area_size, commit_area_size,
-                                      executable, space, new FreeListLegacy());
+  MemoryChunk* memory_chunk = memory_allocator->AllocateChunk(
+      reserve_area_size, commit_area_size, executable, space);
   size_t reserved_size =
       ((executable == EXECUTABLE))
           ? allocatable_memory_area_offset +
@@ -184,7 +183,7 @@ TEST(MemoryAllocator) {
   CHECK(!faked_space.last_page());
   Page* first_page = memory_allocator->AllocatePage(
       faked_space.AreaSize(), static_cast<PagedSpace*>(&faked_space),
-      NOT_EXECUTABLE, new FreeListLegacy());
+      NOT_EXECUTABLE);
 
   faked_space.memory_chunk_list().PushBack(first_page);
   CHECK(first_page->next_page() == nullptr);
@@ -197,7 +196,7 @@ TEST(MemoryAllocator) {
   // Again, we should get n or n - 1 pages.
   Page* other = memory_allocator->AllocatePage(
       faked_space.AreaSize(), static_cast<PagedSpace*>(&faked_space),
-      NOT_EXECUTABLE, new FreeListLegacy());
+      NOT_EXECUTABLE);
   total_pages++;
   faked_space.memory_chunk_list().PushBack(other);
   int page_count = 0;
