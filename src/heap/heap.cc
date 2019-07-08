@@ -543,7 +543,7 @@ void Heap::PrintFreeListsStats() {
         out_str << "[" << cat << ": " << std::setw(4) << length << " || "
                 << std::setw(6) << sum << " ]"
                 << (cat == old_space()->free_list()->kLastCategory() ? "\n"
-                                                                   : ", ");
+                                                                     : ", ");
       }
       categories_lengths[cat] += length;
       categories_sums[cat] += sum;
@@ -572,8 +572,8 @@ void Heap::PrintFreeListsStats() {
                "FreeLists global statistics: "
                "[category: length || total free KB]\n");
   std::ostringstream out_str;
-  for (int cat = kFirstCategory; cat <= old_space()->free_list()->kLastCategory();
-       cat++) {
+  for (int cat = kFirstCategory;
+       cat <= old_space()->free_list()->kLastCategory(); cat++) {
     out_str << "[" << cat << ": " << categories_lengths[cat] << " || "
             << std::fixed << std::setprecision(2)
             << static_cast<double>(categories_sums[cat]) / KB << " KB]"

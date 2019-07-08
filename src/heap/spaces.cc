@@ -688,8 +688,7 @@ PageAllocator::Permission DefaultWritableCodePermissions() {
 MemoryChunk* MemoryChunk::Initialize(Heap* heap, Address base, size_t size,
                                      Address area_start, Address area_end,
                                      Executability executable, Space* owner,
-                                     VirtualMemory reservation,
-                                     FreeList* free_list) {
+                                     VirtualMemory reservation) {
   MemoryChunk* chunk = FromAddress(base);
 
   DCHECK_EQ(base, chunk->address());
@@ -727,7 +726,8 @@ MemoryChunk* MemoryChunk::Initialize(Heap* heap, Address base, size_t size,
   chunk->external_backing_store_bytes_
       [ExternalBackingStoreType::kExternalString] = 0;
 
-  chunk->free_list_ = free_list;
+  chunk->categories_ =
+      new FreeListCategory*[owner->free_list()->kNumberOfCategories()]();
 
   chunk->AllocateMarkingBitmap();
   if (owner->identity() == RO_SPACE) {
@@ -829,24 +829,23 @@ LargePage* LargePage::Initialize(Heap* heap, MemoryChunk* chunk,
 }
 
 void Page::AllocateFreeListCategories() {
-  for (int i = kFirstCategory; i <= free_list_->kLastCategory(); i++) {
-    free_list_->categories_[i] = new FreeListCategory(
+  for (int i = kFirstCategory; i <= free_list()->kLastCategory(); i++) {
+    categories_[i] = new FreeListCategory(
         reinterpret_cast<PagedSpace*>(owner())->free_list(), this);
   }
 }
 
 void Page::InitializeFreeListCategories() {
-  for (int i = kFirstCategory; i <= free_list_->kLastCategory(); i++) {
-    free_list_->categories_[i]->Initialize(
-        static_cast<FreeListCategoryType>(i));
+  for (int i = kFirstCategory; i <= free_list()->kLastCategory(); i++) {
+    categories_[i]->Initialize(static_cast<FreeListCategoryType>(i));
   }
 }
 
 void Page::ReleaseFreeListCategories() {
-  for (int i = kFirstCategory; i <= free_list_->kLastCategory(); i++) {
-    if (free_list_->categories_[i] != nullptr) {
-      delete free_list_->categories_[i];
-      free_list_->categories_[i] = nullptr;
+  for (int i = kFirstCategory; i <= free_list()->kLastCategory(); i++) {
+    if (categories_[i] != nullptr) {
+      delete categories_[i];
+      categories_[i] = nullptr;
     }
   }
 }
@@ -877,7 +876,7 @@ bool MemoryChunk::InLargeObjectSpace() const {
 MemoryChunk* MemoryAllocator::AllocateChunk(size_t reserve_area_size,
                                             size_t commit_area_size,
                                             Executability executable,
-                                            Space* owner, FreeList* free_list) {
+                                            Space* owner) {
   DCHECK_LE(commit_area_size, reserve_area_size);
 
   size_t chunk_size;
@@ -988,13 +987,13 @@ MemoryChunk* MemoryAllocator::AllocateChunk(size_t reserve_area_size,
       size_executable_ -= chunk_size;
     }
     CHECK(last_chunk_.IsReserved());
-    return AllocateChunk(reserve_area_size, commit_area_size, executable, owner,
-                         free_list);
+    return AllocateChunk(reserve_area_size, commit_area_size, executable,
+                         owner);
   }
 
-  MemoryChunk* chunk = MemoryChunk::Initialize(
-      heap, base, chunk_size, area_start, area_end, executable, owner,
-      std::move(reservation), free_list);
+  MemoryChunk* chunk =
+      MemoryChunk::Initialize(heap, base, chunk_size, area_start, area_end,
+                              executable, owner, std::move(reservation));
 
   if (chunk->executable()) RegisterExecutableMemoryChunk(chunk);
   return chunk;
@@ -1237,18 +1236,17 @@ template EXPORT_TEMPLATE_DEFINE(V8_EXPORT_PRIVATE) void MemoryAllocator::Free<
 
 template <MemoryAllocator::AllocationMode alloc_mode, typename SpaceType>
 Page* MemoryAllocator::AllocatePage(size_t size, SpaceType* owner,
-                                    Executability executable,
-                                    FreeList* free_list) {
+                                    Executability executable) {
   MemoryChunk* chunk = nullptr;
   if (alloc_mode == kPooled) {
     DCHECK_EQ(size, static_cast<size_t>(
                         MemoryChunkLayout::AllocatableMemoryInMemoryChunk(
                             owner->identity())));
     DCHECK_EQ(executable, NOT_EXECUTABLE);
-    chunk = AllocatePagePooled(owner, free_list);
+    chunk = AllocatePagePooled(owner);
   }
   if (chunk == nullptr) {
-    chunk = AllocateChunk(size, size, executable, owner, free_list);
+    chunk = AllocateChunk(size, size, executable, owner);
   }
   if (chunk == nullptr) return nullptr;
   return owner->InitializePage(chunk);
@@ -1256,29 +1254,24 @@ Page* MemoryAllocator::AllocatePage(size_t size, SpaceType* owner,
 
 template EXPORT_TEMPLATE_DEFINE(V8_EXPORT_PRIVATE)
     Page* MemoryAllocator::AllocatePage<MemoryAllocator::kRegular, PagedSpace>(
-        size_t size, PagedSpace* owner, Executability executable,
-        FreeList* free_list);
+        size_t size, PagedSpace* owner, Executability executable);
 template EXPORT_TEMPLATE_DEFINE(V8_EXPORT_PRIVATE)
     Page* MemoryAllocator::AllocatePage<MemoryAllocator::kRegular, SemiSpace>(
-        size_t size, SemiSpace* owner, Executability executable,
-        FreeList* free_list);
+        size_t size, SemiSpace* owner, Executability executable);
 template EXPORT_TEMPLATE_DEFINE(V8_EXPORT_PRIVATE)
     Page* MemoryAllocator::AllocatePage<MemoryAllocator::kPooled, SemiSpace>(
-        size_t size, SemiSpace* owner, Executability executable,
-        FreeList* free_list);
+        size_t size, SemiSpace* owner, Executability executable);
 
 LargePage* MemoryAllocator::AllocateLargePage(size_t size,
                                               LargeObjectSpace* owner,
                                               Executability executable) {
-  MemoryChunk* chunk =
-      AllocateChunk(size, size, executable, owner, new NoFreeList());
+  MemoryChunk* chunk = AllocateChunk(size, size, executable, owner);
   if (chunk == nullptr) return nullptr;
   return LargePage::Initialize(isolate_->heap(), chunk, executable);
 }
 
 template <typename SpaceType>
-MemoryChunk* MemoryAllocator::AllocatePagePooled(SpaceType* owner,
-                                                 FreeList* free_list) {
+MemoryChunk* MemoryAllocator::AllocatePagePooled(SpaceType* owner) {
   MemoryChunk* chunk = unmapper()->TryGetPooledMemoryChunkSafe();
   if (chunk == nullptr) return nullptr;
   const int size = MemoryChunk::kPageSize;
@@ -1295,8 +1288,7 @@ MemoryChunk* MemoryAllocator::AllocatePagePooled(SpaceType* owner,
     ZapBlock(start, size, kZapValue);
   }
   MemoryChunk::Initialize(isolate_->heap(), start, size, area_start, area_end,
-                          NOT_EXECUTABLE, owner, std::move(reservation),
-                          free_list);
+                          NOT_EXECUTABLE, owner, std::move(reservation));
   size_ += size;
   return chunk;
 }
@@ -1405,7 +1397,7 @@ void MemoryChunk::ReleaseAllAllocatedMemory() {
     Page* page = static_cast<Page*>(this);
     page->ReleaseFreeListCategories();
   }
-  delete free_list_;
+  delete[] categories_;
 }
 
 static SlotSet* AllocateAndInitializeSlotSet(size_t size, Address page_start) {
@@ -1606,9 +1598,7 @@ intptr_t Space::GetNextInlineAllocationStepSize() {
 
 PagedSpace::PagedSpace(Heap* heap, AllocationSpace space,
                        Executability executable, FreeList* free_list)
-    : SpaceWithLinearArea(heap, space),
-      executable_(executable),
-      free_list_(free_list) {
+    : SpaceWithLinearArea(heap, space, free_list), executable_(executable) {
   area_size_ = MemoryChunkLayout::AllocatableMemoryInMemoryChunk(space);
   accounting_stats_.Clear();
 }
@@ -1620,7 +1610,6 @@ void PagedSpace::TearDown() {
     heap()->memory_allocator()->Free<MemoryAllocator::kFull>(chunk);
   }
   accounting_stats_.Clear();
-  delete free_list_;
 }
 
 void PagedSpace::RefillFreeList() {
@@ -1805,8 +1794,8 @@ bool PagedSpace::Expand() {
 
   if (!heap()->CanExpandOldGeneration(size)) return false;
 
-  Page* page = heap()->memory_allocator()->AllocatePage(
-      size, this, executable(), free_list_->MakeNew());
+  Page* page =
+      heap()->memory_allocator()->AllocatePage(size, this, executable());
   if (page == nullptr) return false;
   // Pages created during bootstrapping may contain immortal immovable objects.
   if (!heap()->deserialization_complete()) page->MarkNeverEvacuate();
@@ -2196,7 +2185,7 @@ void PagedSpace::VerifyCountersBeforeConcurrentSweeping() {
 NewSpace::NewSpace(Heap* heap, v8::PageAllocator* page_allocator,
                    size_t initial_semispace_capacity,
                    size_t max_semispace_capacity)
-    : SpaceWithLinearArea(heap, NEW_SPACE),
+    : SpaceWithLinearArea(heap, NEW_SPACE, new FreeListLegacy()),
       to_space_(heap, kToSpace),
       from_space_(heap, kFromSpace) {
   DCHECK(initial_semispace_capacity <= max_semispace_capacity);
@@ -2304,7 +2293,7 @@ bool SemiSpace::EnsureCurrentCapacity() {
       current_page =
           heap()->memory_allocator()->AllocatePage<MemoryAllocator::kPooled>(
               MemoryChunkLayout::AllocatableMemoryInDataPage(), this,
-              NOT_EXECUTABLE, heap()->old_space()->free_list()->MakeNew());
+              NOT_EXECUTABLE);
       if (current_page == nullptr) return false;
       DCHECK_NOT_NULL(current_page);
       memory_chunk_list_.PushBack(current_page);
@@ -2650,7 +2639,7 @@ bool SemiSpace::Commit() {
     Page* new_page =
         heap()->memory_allocator()->AllocatePage<MemoryAllocator::kPooled>(
             MemoryChunkLayout::AllocatableMemoryInDataPage(), this,
-            NOT_EXECUTABLE, heap()->old_space()->free_list()->MakeNew());
+            NOT_EXECUTABLE);
     if (new_page == nullptr) {
       if (pages_added) RewindPages(pages_added);
       return false;
@@ -2708,7 +2697,7 @@ bool SemiSpace::GrowTo(size_t new_capacity) {
     Page* new_page =
         heap()->memory_allocator()->AllocatePage<MemoryAllocator::kPooled>(
             MemoryChunkLayout::AllocatableMemoryInDataPage(), this,
-            NOT_EXECUTABLE, heap()->old_space()->free_list()->MakeNew());
+            NOT_EXECUTABLE);
     if (new_page == nullptr) {
       if (pages_added) RewindPages(pages_added);
       return false;
@@ -3024,10 +3013,7 @@ FreeListLegacy::FreeListLegacy() {
   kNumberOfCategories_ = kHuge + 1;
   kLastCategory_ = kHuge;
 
-  categories_ = new FreeListCategory*[kNumberOfCategories_];
-  for (int i = kFirstCategory; i < kNumberOfCategories_; i++) {
-    categories_[i] = nullptr;
-  }
+  categories_ = new FreeListCategory*[kNumberOfCategories_]();
   Reset();
 }
 
@@ -3216,9 +3202,9 @@ void FreeList::PrintCategories(FreeListCategoryType type) {
 
 int MemoryChunk::FreeListsLength() {
   int length = 0;
-  for (int cat = kFirstCategory; cat <= free_list_->kLastCategory(); cat++) {
-    if (free_list_->categories_[cat] != nullptr) {
-      length += free_list_->categories_[cat]->FreeListLength();
+  for (int cat = kFirstCategory; cat <= free_list()->kLastCategory(); cat++) {
+    if (categories_[cat] != nullptr) {
+      length += categories_[cat]->FreeListLength();
     }
   }
   return length;
@@ -3394,8 +3380,8 @@ void ReadOnlyPage::MakeHeaderRelocatable() {
   // Detached read-only space needs to have a valid marking bitmap and free list
   // categories. Instruct Lsan to ignore them if required.
   LSAN_IGNORE_OBJECT(marking_bitmap_);
-  for (int i = kFirstCategory; i < free_list_->kNumberOfCategories(); i++) {
-    LSAN_IGNORE_OBJECT(free_list_->categories_[i]);
+  for (int i = kFirstCategory; i < free_list()->kNumberOfCategories(); i++) {
+    LSAN_IGNORE_OBJECT(categories_[i]);
   }
   heap_ = nullptr;
   owner_ = nullptr;
@@ -3523,7 +3509,10 @@ LargeObjectSpace::LargeObjectSpace(Heap* heap)
     : LargeObjectSpace(heap, LO_SPACE) {}
 
 LargeObjectSpace::LargeObjectSpace(Heap* heap, AllocationSpace id)
-    : Space(heap, id), size_(0), page_count_(0), objects_size_(0) {}
+    : Space(heap, id, new NoFreeList()),
+      size_(0),
+      page_count_(0),
+      objects_size_(0) {}
 
 void LargeObjectSpace::TearDown() {
   while (!memory_chunk_list_.Empty()) {
