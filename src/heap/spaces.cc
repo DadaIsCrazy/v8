@@ -2640,12 +2640,16 @@ void SemiSpace::TearDown() {
 
 bool SemiSpace::Commit() {
   DCHECK(!is_committed());
+  DCHECK_NOT_NULL(heap()->old_space());
   const int num_pages = static_cast<int>(current_capacity_ / Page::kPageSize);
   for (int pages_added = 0; pages_added < num_pages; pages_added++) {
+    // Pages in the new spaces can be moved to the old space by the full
+    // collector. Therefore, they must be initialized with the same FreeList as
+    // old pages.
     Page* new_page =
         heap()->memory_allocator()->AllocatePage<MemoryAllocator::kPooled>(
             MemoryChunkLayout::AllocatableMemoryInDataPage(), this,
-            NOT_EXECUTABLE, new FreeListLegacy());
+            NOT_EXECUTABLE, heap()->old_space()->free_list()->MakeNew());
     if (new_page == nullptr) {
       if (pages_added) RewindPages(pages_added);
       return false;

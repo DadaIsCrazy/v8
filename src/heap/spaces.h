@@ -342,6 +342,8 @@ class FreeList {
   friend class ReadOnlyPage;
 };
 
+// FreeList used for spaces that don't have freelists
+// (only the LargeObject space for now).
 class NoFreeList : public FreeList {
  public:
   virtual FreeList* MakeNew() { return new NoFreeList(); }
@@ -974,7 +976,6 @@ class MemoryChunk {
   friend class MinorMarkingState;
   friend class MinorNonAtomicMarkingState;
   friend class PagedSpace;
-  friend class Sweeper;
 };
 
 STATIC_ASSERT(sizeof(std::atomic<intptr_t>) == kSystemPointerSize);
