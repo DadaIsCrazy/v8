@@ -234,7 +234,7 @@ class FreeListCategory {
 class FreeList {
  public:
   // Creates a Freelist of the default class (FreeListLegacy for now).
-  static FreeList* CreateFreeList();
+  V8_EXPORT_PRIVATE static FreeList* CreateFreeList();
 
   virtual ~FreeList() = default;
 
