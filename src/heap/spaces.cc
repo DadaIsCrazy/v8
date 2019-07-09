@@ -1389,7 +1389,10 @@ void MemoryChunk::ReleaseAllocatedMemoryNeededForWritableChunk() {
   if (local_tracker_ != nullptr) ReleaseLocalTracker();
   if (young_generation_bitmap_ != nullptr) ReleaseYoungGenerationBitmap();
 
-  delete[] categories_;
+  if (categories_ != nullptr) {
+    delete[] categories_;
+    categories_ = nullptr;
+  }
 }
 
 void MemoryChunk::ReleaseAllAllocatedMemory() {
