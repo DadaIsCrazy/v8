@@ -119,7 +119,7 @@ class Space;
 #define DCHECK_CODEOBJECT_SIZE(size, code_space) \
   DCHECK((0 < size) && (size <= code_space->AreaSize()))
 
-typedef int FreeListCategoryType;
+using FreeListCategoryType = int;
 
 static const FreeListCategoryType kFirstCategory = 0;
 static const FreeListCategoryType kInvalidCategory = -1;
@@ -224,7 +224,7 @@ class FreeListCategory {
   DISALLOW_IMPLICIT_CONSTRUCTORS(FreeListCategory);
 };
 
-// A free list maintaining free blocks of memory. The free list is organized in
+// A free list maintains free blocks of memory. The free list is organized in
 // a way to encourage objects allocated around the same time to be near each
 // other. The normal way to allocate is intended to be by bumping a 'top'
 // pointer until it hits a 'limit' pointer.  When the limit is hit we need to
@@ -300,12 +300,12 @@ class FreeList {
 #endif
 
  protected:
-  class FreeListCategoryIterator {
+  class FreeListCategoryIterator final {
    public:
     FreeListCategoryIterator(FreeList* free_list, FreeListCategoryType type)
         : current_(free_list->categories_[type]) {}
 
-    bool HasNext() { return current_ != nullptr; }
+    bool HasNext() const { return current_ != nullptr; }
 
     FreeListCategory* Next() {
       DCHECK(HasNext());
@@ -317,13 +317,6 @@ class FreeList {
    private:
     FreeListCategory* current_;
   };
-
-  // The size range of blocks, in bytes.
-  static const size_t kMinBlockSize;
-
-  // This is a conservative upper bound. The actual maximum block size takes
-  // padding and alignment of data and code pages into account.
-  static const size_t kMaxBlockSize;
 
   FreeListCategory* top(FreeListCategoryType type) const {
     return categories_[type];
@@ -343,19 +336,19 @@ class FreeList {
 
 // FreeList used for spaces that don't have freelists
 // (only the LargeObject space for now).
-class NoFreeList : public FreeList {
+class NoFreeList final : public FreeList {
  public:
-  size_t GuaranteedAllocatable(size_t maximum_freed) override {
+  size_t GuaranteedAllocatable(size_t maximum_freed) final {
     FATAL("NoFreeList can't be used as a standard FreeList. ");
   }
-  size_t Free(Address start, size_t size_in_bytes, FreeMode mode) override {
+  size_t Free(Address start, size_t size_in_bytes, FreeMode mode) final {
     FATAL("NoFreeList can't be used as a standard FreeList.");
   }
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                           size_t* node_size) override {
+                                           size_t* node_size) final {
     FATAL("NoFreeList can't be used as a standard FreeList.");
   }
-  Page* GetPageForSize(size_t size_in_bytes) override {
+  Page* GetPageForSize(size_t size_in_bytes) final {
     FATAL("NoFreeList can't be used as a standard FreeList.");
   }
 };
@@ -1128,7 +1121,7 @@ class MemoryChunk {
 STATIC_ASSERT(sizeof(std::atomic<intptr_t>) == kSystemPointerSize);
 
 // -----------------------------------------------------------------------------
-// A page is a memory chunk of a size 512K. Large object pages may be larger.
+// A page is a memory chunk of a size 256K. Large object pages may be larger.
 //
 // The only way to get a page pointer is by calling factory methods:
 //   Page* p = Page::FromAddress(addr); or
@@ -1973,7 +1966,7 @@ class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
     return kHuge;
   }
 
-  V8_EXPORT_PRIVATE Page* GetPageForSize(size_t size_in_bytes) override {
+  Page* GetPageForSize(size_t size_in_bytes) override {
     const int minimum_category =
         static_cast<int>(SelectFreeListCategoryType(size_in_bytes));
     Page* page = GetPageForCategoryType(kHuge);
