@@ -726,8 +726,7 @@ MemoryChunk* MemoryChunk::Initialize(Heap* heap, Address base, size_t size,
   chunk->external_backing_store_bytes_
       [ExternalBackingStoreType::kExternalString] = 0;
 
-  chunk->categories_ =
-      new FreeListCategory*[owner->free_list()->number_of_categories()]();
+  chunk->categories_ = nullptr;
 
   chunk->AllocateMarkingBitmap();
   if (owner->identity() == RO_SPACE) {
@@ -829,7 +828,10 @@ LargePage* LargePage::Initialize(Heap* heap, MemoryChunk* chunk,
 }
 
 void Page::AllocateFreeListCategories() {
+  DCHECK_NULL(categories_);
+  categories_ = new FreeListCategory*[free_list()->number_of_categories()]();
   for (int i = kFirstCategory; i <= free_list()->last_category(); i++) {
+    DCHECK_NULL(categories_[i]);
     categories_[i] = new FreeListCategory(
         reinterpret_cast<PagedSpace*>(owner())->free_list(), this);
   }
@@ -842,11 +844,15 @@ void Page::InitializeFreeListCategories() {
 }
 
 void Page::ReleaseFreeListCategories() {
-  for (int i = kFirstCategory; i <= free_list()->last_category(); i++) {
-    if (categories_[i] != nullptr) {
-      delete categories_[i];
-      categories_[i] = nullptr;
+  if (categories_ != nullptr) {
+    for (int i = kFirstCategory; i <= free_list()->last_category(); i++) {
+      if (categories_[i] != nullptr) {
+        delete categories_[i];
+        categories_[i] = nullptr;
+      }
     }
+    delete[] categories_;
+    categories_ = nullptr;
   }
 }
 
@@ -1388,11 +1394,6 @@ void MemoryChunk::ReleaseAllocatedMemoryNeededForWritableChunk() {
 
   if (local_tracker_ != nullptr) ReleaseLocalTracker();
   if (young_generation_bitmap_ != nullptr) ReleaseYoungGenerationBitmap();
-
-  if (categories_ != nullptr) {
-    delete[] categories_;
-    categories_ = nullptr;
-  }
 }
 
 void MemoryChunk::ReleaseAllAllocatedMemory() {
@@ -2182,7 +2183,7 @@ void PagedSpace::VerifyCountersBeforeConcurrentSweeping() {
 NewSpace::NewSpace(Heap* heap, v8::PageAllocator* page_allocator,
                    size_t initial_semispace_capacity,
                    size_t max_semispace_capacity)
-    : SpaceWithLinearArea(heap, NEW_SPACE, new FreeListLegacy()),
+    : SpaceWithLinearArea(heap, NEW_SPACE, new NoFreeList()),
       to_space_(heap, kToSpace),
       from_space_(heap, kFromSpace) {
   DCHECK(initial_semispace_capacity <= max_semispace_capacity);
