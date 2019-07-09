@@ -233,6 +233,9 @@ class FreeListCategory {
 // categories would scatter allocation more.
 class FreeList {
  public:
+  // Creates a Freelist of the default class (FreeListLegacy for now).
+  static FreeList* CreateFreeList();
+
   virtual ~FreeList() = default;
 
   virtual size_t GuaranteedAllocatable(size_t maximum_freed) = 0;
@@ -2920,7 +2923,7 @@ class V8_EXPORT_PRIVATE PauseAllocationObserversScope {
 class V8_EXPORT_PRIVATE CompactionSpace : public PagedSpace {
  public:
   CompactionSpace(Heap* heap, AllocationSpace id, Executability executable)
-      : PagedSpace(heap, id, executable, new FreeListLegacy()) {}
+      : PagedSpace(heap, id, executable, FreeList::CreateFreeList()) {}
 
   bool is_local() override { return true; }
 
@@ -2967,7 +2970,8 @@ class OldSpace : public PagedSpace {
   // Creates an old space object. The constructor does not allocate pages
   // from OS.
   explicit OldSpace(Heap* heap)
-      : PagedSpace(heap, OLD_SPACE, NOT_EXECUTABLE, new FreeListLegacy()) {}
+      : PagedSpace(heap, OLD_SPACE, NOT_EXECUTABLE,
+                   FreeList::CreateFreeList()) {}
 
   static bool IsAtPageStart(Address addr) {
     return static_cast<intptr_t>(addr & kPageAlignmentMask) ==
@@ -2983,7 +2987,7 @@ class CodeSpace : public PagedSpace {
   // Creates an old space object. The constructor does not allocate pages
   // from OS.
   explicit CodeSpace(Heap* heap)
-      : PagedSpace(heap, CODE_SPACE, EXECUTABLE, new FreeListLegacy()) {}
+      : PagedSpace(heap, CODE_SPACE, EXECUTABLE, FreeList::CreateFreeList()) {}
 };
 
 // For contiguous spaces, top should be in the space (or at the end) and limit
@@ -3001,7 +3005,8 @@ class MapSpace : public PagedSpace {
  public:
   // Creates a map space object.
   explicit MapSpace(Heap* heap)
-      : PagedSpace(heap, MAP_SPACE, NOT_EXECUTABLE, new FreeListLegacy()) {}
+      : PagedSpace(heap, MAP_SPACE, NOT_EXECUTABLE,
+                   FreeList::CreateFreeList()) {}
 
   int RoundSizeDownToObjectAlignment(int size) override {
     if (base::bits::IsPowerOfTwo(Map::kSize)) {

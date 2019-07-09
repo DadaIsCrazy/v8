@@ -3005,6 +3005,8 @@ void FreeListCategory::Relink() {
   owner()->AddCategory(this);
 }
 
+FreeList* FreeList::CreateFreeList() { return new FreeListLegacy(); }
+
 FreeListLegacy::FreeListLegacy() {
   wasted_bytes_ = 0;
   number_of_categories_ = kHuge + 1;
@@ -3368,7 +3370,7 @@ void MapSpace::VerifyObject(HeapObject object) { CHECK(object.IsMap()); }
 #endif
 
 ReadOnlySpace::ReadOnlySpace(Heap* heap)
-    : PagedSpace(heap, RO_SPACE, NOT_EXECUTABLE, new FreeListLegacy()),
+    : PagedSpace(heap, RO_SPACE, NOT_EXECUTABLE, FreeList::CreateFreeList()),
       is_string_padding_cleared_(heap->isolate()->initialized_from_snapshot()) {
 }
 
