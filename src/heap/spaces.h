@@ -370,7 +370,7 @@ class V8_EXPORT_PRIVATE Space : public Malloced {
         id_(id),
         committed_(0),
         max_committed_(0),
-        free_list_(free_list) {
+        free_list_(std::unique_ptr<FreeList>(free_list)) {
     external_backing_store_bytes_ =
         new std::atomic<size_t>[ExternalBackingStoreType::kNumTypes];
     external_backing_store_bytes_[ExternalBackingStoreType::kArrayBuffer] = 0;
@@ -387,7 +387,6 @@ class V8_EXPORT_PRIVATE Space : public Malloced {
   virtual ~Space() {
     delete[] external_backing_store_bytes_;
     external_backing_store_bytes_ = nullptr;
-    delete free_list_;
   }
 
   Heap* heap() const {
@@ -474,7 +473,7 @@ class V8_EXPORT_PRIVATE Space : public Malloced {
 
   base::List<MemoryChunk>& memory_chunk_list() { return memory_chunk_list_; }
 
-  FreeList* free_list() { return free_list_; }
+  FreeList* free_list() { return free_list_.get(); }
 
 #ifdef DEBUG
   virtual void Print() = 0;
@@ -506,7 +505,7 @@ class V8_EXPORT_PRIVATE Space : public Malloced {
   size_t committed_;
   size_t max_committed_;
 
-  FreeList* free_list_;
+  std::unique_ptr<FreeList> free_list_;
 
   DISALLOW_COPY_AND_ASSIGN(Space);
 };
