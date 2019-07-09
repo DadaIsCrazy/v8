@@ -3376,9 +3376,6 @@ void ReadOnlyPage::MakeHeaderRelocatable() {
   // Detached read-only space needs to have a valid marking bitmap and free list
   // categories. Instruct Lsan to ignore them if required.
   LSAN_IGNORE_OBJECT(marking_bitmap_);
-  for (int i = kFirstCategory; i < free_list()->number_of_categories(); i++) {
-    LSAN_IGNORE_OBJECT(categories_[i]);
-  }
   heap_ = nullptr;
   owner_ = nullptr;
 }
