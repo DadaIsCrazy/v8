@@ -241,7 +241,7 @@ class FreeList {
                                                    size_t* node_size) = 0;
 
   // Returns a page containing an entry for a given type, or nullptr otherwise.
-  virtual Page* GetPageForSize(size_t size_in_bytes);
+  V8_EXPORT_PRIVATE virtual Page* GetPageForSize(size_t size_in_bytes) = 0;
 
   void Reset();
 
@@ -345,17 +345,17 @@ class FreeList {
 // (only the LargeObject space for now).
 class NoFreeList : public FreeList {
  public:
-  virtual size_t GuaranteedAllocatable(size_t maximum_freed) {
+  size_t GuaranteedAllocatable(size_t maximum_freed) override {
     FATAL("NoFreeList can't be used as a standard FreeList. ");
   }
-  virtual size_t Free(Address start, size_t size_in_bytes, FreeMode mode) {
+  size_t Free(Address start, size_t size_in_bytes, FreeMode mode) override {
     FATAL("NoFreeList can't be used as a standard FreeList.");
   }
-  virtual V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                                   size_t* node_size) {
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size) override {
     FATAL("NoFreeList can't be used as a standard FreeList.");
   }
-  virtual Page* GetPageForSize(size_t size_in_bytes) {
+  Page* GetPageForSize(size_t size_in_bytes) override {
     FATAL("NoFreeList can't be used as a standard FreeList.");
   }
 };
@@ -1939,11 +1939,9 @@ class AllocationStats {
 //   larger. Empty pages are also added to this list.
 class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
  public:
-  enum { kTiniest, kTiny, kSmall, kMedium, kLarge, kHuge };
-
   // This method returns how much memory can be allocated after freeing
   // maximum_freed memory.
-  virtual size_t GuaranteedAllocatable(size_t maximum_freed) {
+  size_t GuaranteedAllocatable(size_t maximum_freed) override {
     if (maximum_freed <= kTiniestListMax) {
       // Since we are not iterating over all list entries, we cannot guarantee
       // that we can find the maximum freed block in that free list.
@@ -1960,8 +1958,7 @@ class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
     return maximum_freed;
   }
 
-  virtual FreeListCategoryType SelectFreeListCategoryType(
-      size_t size_in_bytes) {
+  FreeListCategoryType SelectFreeListCategoryType(size_t size_in_bytes) {
     if (size_in_bytes <= kTiniestListMax) {
       return kTiniest;
     } else if (size_in_bytes <= kTinyListMax) {
@@ -1976,7 +1973,7 @@ class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
     return kHuge;
   }
 
-  virtual Page* GetPageForSize(size_t size_in_bytes) {
+  V8_EXPORT_PRIVATE Page* GetPageForSize(size_t size_in_bytes) override {
     const int minimum_category =
         static_cast<int>(SelectFreeListCategoryType(size_in_bytes));
     Page* page = GetPageForCategoryType(kHuge);
@@ -2002,16 +1999,18 @@ class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
   // was too small. Bookkeeping information will be written to the block, i.e.,
   // its contents will be destroyed. The start address should be word aligned,
   // and the size should be a non-zero multiple of the word size.
-  virtual size_t Free(Address start, size_t size_in_bytes, FreeMode mode);
+  size_t Free(Address start, size_t size_in_bytes, FreeMode mode) override;
 
   // Allocates a free space node frome the free list of at least size_in_bytes
   // bytes. Returns the actual node size in node_size which can be bigger than
   // size_in_bytes. This method returns null if the allocation request cannot be
   // handled by the free list.
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                           size_t* node_size);
+                                           size_t* node_size) override;
 
  private:
+  enum { kTiniest, kTiny, kSmall, kMedium, kLarge, kHuge };
+
   static const size_t kMinBlockSize = 3 * kTaggedSize;
 
   // This is a conservative upper bound. The actual maximum block size takes
