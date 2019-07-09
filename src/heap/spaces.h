@@ -2477,7 +2477,7 @@ class SemiSpace : public Space {
   static void Swap(SemiSpace* from, SemiSpace* to);
 
   SemiSpace(Heap* heap, SemiSpaceId semispace)
-      : Space(heap, NEW_SPACE, new FreeListLegacy()),
+      : Space(heap, NEW_SPACE, new NoFreeList()),
         current_capacity_(0),
         maximum_capacity_(0),
         minimum_capacity_(0),
