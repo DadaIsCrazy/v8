@@ -1388,16 +1388,18 @@ void MemoryChunk::ReleaseAllocatedMemoryNeededForWritableChunk() {
 
   if (local_tracker_ != nullptr) ReleaseLocalTracker();
   if (young_generation_bitmap_ != nullptr) ReleaseYoungGenerationBitmap();
+
+  delete[] categories_;
 }
 
 void MemoryChunk::ReleaseAllAllocatedMemory() {
-  ReleaseAllocatedMemoryNeededForWritableChunk();
-  if (marking_bitmap_ != nullptr) ReleaseMarkingBitmap();
   if (!IsLargePage()) {
     Page* page = static_cast<Page*>(this);
     page->ReleaseFreeListCategories();
   }
-  delete[] categories_;
+
+  ReleaseAllocatedMemoryNeededForWritableChunk();
+  if (marking_bitmap_ != nullptr) ReleaseMarkingBitmap();
 }
 
 static SlotSet* AllocateAndInitializeSlotSet(size_t size, Address page_start) {
