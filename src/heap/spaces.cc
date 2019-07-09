@@ -727,7 +727,7 @@ MemoryChunk* MemoryChunk::Initialize(Heap* heap, Address base, size_t size,
       [ExternalBackingStoreType::kExternalString] = 0;
 
   chunk->categories_ =
-      new FreeListCategory*[owner->free_list()->kNumberOfCategories()]();
+      new FreeListCategory*[owner->free_list()->number_of_categories()]();
 
   chunk->AllocateMarkingBitmap();
   if (owner->identity() == RO_SPACE) {
@@ -829,20 +829,20 @@ LargePage* LargePage::Initialize(Heap* heap, MemoryChunk* chunk,
 }
 
 void Page::AllocateFreeListCategories() {
-  for (int i = kFirstCategory; i <= free_list()->kLastCategory(); i++) {
+  for (int i = kFirstCategory; i <= free_list()->last_category(); i++) {
     categories_[i] = new FreeListCategory(
         reinterpret_cast<PagedSpace*>(owner())->free_list(), this);
   }
 }
 
 void Page::InitializeFreeListCategories() {
-  for (int i = kFirstCategory; i <= free_list()->kLastCategory(); i++) {
+  for (int i = kFirstCategory; i <= free_list()->last_category(); i++) {
     categories_[i]->Initialize(static_cast<FreeListCategoryType>(i));
   }
 }
 
 void Page::ReleaseFreeListCategories() {
-  for (int i = kFirstCategory; i <= free_list()->kLastCategory(); i++) {
+  for (int i = kFirstCategory; i <= free_list()->last_category(); i++) {
     if (categories_[i] != nullptr) {
       delete categories_[i];
       categories_[i] = nullptr;
@@ -2627,7 +2627,6 @@ void SemiSpace::TearDown() {
 
 bool SemiSpace::Commit() {
   DCHECK(!is_committed());
-  DCHECK_NOT_NULL(heap()->old_space());
   const int num_pages = static_cast<int>(current_capacity_ / Page::kPageSize);
   for (int pages_added = 0; pages_added < num_pages; pages_added++) {
     // Pages in the new spaces can be moved to the old space by the full
@@ -3007,10 +3006,10 @@ void FreeListCategory::Relink() {
 
 FreeListLegacy::FreeListLegacy() {
   wasted_bytes_ = 0;
-  kNumberOfCategories_ = kHuge + 1;
-  kLastCategory_ = kHuge;
+  number_of_categories_ = kHuge + 1;
+  last_category_ = kHuge;
 
-  categories_ = new FreeListCategory*[kNumberOfCategories_]();
+  categories_ = new FreeListCategory*[number_of_categories_]();
   Reset();
 }
 
@@ -3019,7 +3018,7 @@ FreeListLegacy::~FreeListLegacy() { delete[] categories_; }
 void FreeList::Reset() {
   ForAllFreeListCategories(
       [](FreeListCategory* category) { category->Reset(); });
-  for (int i = kFirstCategory; i < kNumberOfCategories_; i++) {
+  for (int i = kFirstCategory; i < number_of_categories_; i++) {
     categories_[i] = nullptr;
   }
   wasted_bytes_ = 0;
@@ -3152,7 +3151,7 @@ void FreeList::RepairLists(Heap* heap) {
 
 bool FreeList::AddCategory(FreeListCategory* category) {
   FreeListCategoryType type = category->type_;
-  DCHECK_LT(type, kNumberOfCategories_);
+  DCHECK_LT(type, number_of_categories_);
   FreeListCategory* top = categories_[type];
 
   if (category->is_empty()) return false;
@@ -3169,7 +3168,7 @@ bool FreeList::AddCategory(FreeListCategory* category) {
 
 void FreeList::RemoveCategory(FreeListCategory* category) {
   FreeListCategoryType type = category->type_;
-  DCHECK_LT(type, kNumberOfCategories_);
+  DCHECK_LT(type, number_of_categories_);
   FreeListCategory* top = categories_[type];
 
   // Common double-linked list removal.
@@ -3199,7 +3198,7 @@ void FreeList::PrintCategories(FreeListCategoryType type) {
 
 int MemoryChunk::FreeListsLength() {
   int length = 0;
-  for (int cat = kFirstCategory; cat <= free_list()->kLastCategory(); cat++) {
+  for (int cat = kFirstCategory; cat <= free_list()->last_category(); cat++) {
     if (categories_[cat] != nullptr) {
       length += categories_[cat]->FreeListLength();
     }
@@ -3224,7 +3223,7 @@ size_t FreeListCategory::SumFreeList() {
 #ifdef DEBUG
 bool FreeList::IsVeryLong() {
   int len = 0;
-  for (int i = kFirstCategory; i < kNumberOfCategories_; i++) {
+  for (int i = kFirstCategory; i < number_of_categories_; i++) {
     FreeListCategoryIterator it(this, static_cast<FreeListCategoryType>(i));
     while (it.HasNext()) {
       len += it.Next()->FreeListLength();
@@ -3377,7 +3376,7 @@ void ReadOnlyPage::MakeHeaderRelocatable() {
   // Detached read-only space needs to have a valid marking bitmap and free list
   // categories. Instruct Lsan to ignore them if required.
   LSAN_IGNORE_OBJECT(marking_bitmap_);
-  for (int i = kFirstCategory; i < free_list()->kNumberOfCategories(); i++) {
+  for (int i = kFirstCategory; i < free_list()->number_of_categories(); i++) {
     LSAN_IGNORE_OBJECT(categories_[i]);
   }
   heap_ = nullptr;

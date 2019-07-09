@@ -233,10 +233,7 @@ class FreeListCategory {
 // categories would scatter allocation more.
 class FreeList {
  public:
-  int kNumberOfCategories() { return kNumberOfCategories_; }
-  FreeListCategoryType kLastCategory() { return kLastCategory_; }
-
-  virtual ~FreeList() {}
+  virtual ~FreeList() = default;
 
   virtual size_t GuaranteedAllocatable(size_t maximum_freed) = 0;
   virtual size_t Free(Address start, size_t size_in_bytes, FreeMode mode) = 0;
@@ -271,6 +268,9 @@ class FreeList {
   V8_EXPORT_PRIVATE size_t EvictFreeListItems(Page* page);
   bool ContainsPageFreeListItems(Page* page);
 
+  int number_of_categories() { return number_of_categories_; }
+  FreeListCategoryType last_category() { return last_category_; }
+
   size_t wasted_bytes() { return wasted_bytes_; }
 
   template <typename Callback>
@@ -285,7 +285,7 @@ class FreeList {
 
   template <typename Callback>
   void ForAllFreeListCategories(Callback callback) {
-    for (int i = kFirstCategory; i < kNumberOfCategories(); i++) {
+    for (int i = kFirstCategory; i < number_of_categories(); i++) {
       ForAllFreeListCategories(static_cast<FreeListCategoryType>(i), callback);
     }
   }
@@ -300,9 +300,6 @@ class FreeList {
 #endif
 
  protected:
-  int kNumberOfCategories_;
-  FreeListCategoryType kLastCategory_;
-
   class FreeListCategoryIterator {
    public:
     FreeListCategoryIterator(FreeList* free_list, FreeListCategoryType type)
@@ -332,6 +329,9 @@ class FreeList {
     return categories_[type];
   }
 
+  int number_of_categories_;
+  FreeListCategoryType last_category_;
+
   std::atomic<size_t> wasted_bytes_;
   FreeListCategory** categories_;
 
@@ -353,7 +353,7 @@ class NoFreeList : public FreeList {
   }
   virtual V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                                    size_t* node_size) {
-    FATAL("NoFreeList can't be usedr as a standard FreeList.");
+    FATAL("NoFreeList can't be used as a standard FreeList.");
   }
   virtual Page* GetPageForSize(size_t size_in_bytes) {
     FATAL("NoFreeList can't be used as a standard FreeList.");
@@ -1183,7 +1183,7 @@ class Page : public MemoryChunk {
 
   template <typename Callback>
   inline void ForAllFreeListCategories(Callback callback) {
-    for (int i = kFirstCategory; i < free_list()->kNumberOfCategories(); i++) {
+    for (int i = kFirstCategory; i < free_list()->number_of_categories(); i++) {
       callback(categories_[i]);
     }
   }

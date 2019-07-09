@@ -516,9 +516,9 @@ void Heap::PrintFreeListsStats() {
   }
 
   std::vector<int> categories_lengths(
-      old_space()->free_list()->kNumberOfCategories(), 0);
+      old_space()->free_list()->number_of_categories(), 0);
   std::vector<size_t> categories_sums(
-      old_space()->free_list()->kNumberOfCategories(), 0);
+      old_space()->free_list()->number_of_categories(), 0);
   unsigned int pageCnt = 0;
 
   // This loops computes freelists lengths and sum.
@@ -532,7 +532,7 @@ void Heap::PrintFreeListsStats() {
     }
 
     for (int cat = kFirstCategory;
-         cat <= old_space()->free_list()->kLastCategory(); cat++) {
+         cat <= old_space()->free_list()->last_category(); cat++) {
       FreeListCategory* free_list =
           page->free_list_category(static_cast<FreeListCategoryType>(cat));
       int length = free_list->FreeListLength();
@@ -541,7 +541,7 @@ void Heap::PrintFreeListsStats() {
       if (FLAG_trace_gc_freelists_verbose) {
         out_str << "[" << cat << ": " << std::setw(4) << length << " || "
                 << std::setw(6) << sum << " ]"
-                << (cat == old_space()->free_list()->kLastCategory() ? "\n"
+                << (cat == old_space()->free_list()->last_category() ? "\n"
                                                                      : ", ");
       }
       categories_lengths[cat] += length;
@@ -572,11 +572,11 @@ void Heap::PrintFreeListsStats() {
                "[category: length || total free KB]\n");
   std::ostringstream out_str;
   for (int cat = kFirstCategory;
-       cat <= old_space()->free_list()->kLastCategory(); cat++) {
+       cat <= old_space()->free_list()->last_category(); cat++) {
     out_str << "[" << cat << ": " << categories_lengths[cat] << " || "
             << std::fixed << std::setprecision(2)
             << static_cast<double>(categories_sums[cat]) / KB << " KB]"
-            << (cat == old_space()->free_list()->kLastCategory() ? "\n" : ", ");
+            << (cat == old_space()->free_list()->last_category() ? "\n" : ", ");
   }
   PrintIsolate(isolate_, "%s", out_str.str().c_str());
 }
@@ -4973,10 +4973,10 @@ void Heap::SetUpFromReadOnlyHeap(ReadOnlyHeap* ro_heap) {
 void Heap::SetUpSpaces() {
   // Ensure SetUpFromReadOnlySpace has been ran.
   DCHECK_NOT_NULL(read_only_space_);
-  space_[OLD_SPACE] = old_space_ = new OldSpace(this);
   space_[NEW_SPACE] = new_space_ =
       new NewSpace(this, memory_allocator_->data_page_allocator(),
                    initial_semispace_size_, max_semi_space_size_);
+  space_[OLD_SPACE] = old_space_ = new OldSpace(this);
   space_[CODE_SPACE] = code_space_ = new CodeSpace(this);
   space_[MAP_SPACE] = map_space_ = new MapSpace(this);
   space_[LO_SPACE] = lo_space_ = new LargeObjectSpace(this);
