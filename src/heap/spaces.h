@@ -2138,6 +2138,84 @@ protected:
   }
 };
 
+
+
+class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
+ public:
+  // This method returns how much memory can be allocated after freeing
+  // maximum_freed memory.
+  size_t GuaranteedAllocatable(size_t maximum_freed) override {
+    if (maximum_freed <= categories_max[0]) {
+      return 0;
+    }
+    for (int cat = kFirstCategory + 1; cat < last_category_; cat++) {
+      if (maximum_freed <= categories_max[cat]) {
+        return categories_max[cat - 1];
+      }
+    }
+    return maximum_freed;
+  }
+
+  Page* GetPageForSize(size_t size_in_bytes) override {
+    const int minimum_category =
+        static_cast<int>(SelectFreeListCategoryType(size_in_bytes));
+    Page* page = GetPageForCategoryType(last_category_);
+    for (int cat = last_category_ - 1; !page && cat >= minimum_category; cat-- ) {
+      page = GetPageForCategoryType(cat);
+    }
+    return page;
+  }
+
+  FreeListMany();
+  ~FreeListMany();
+
+  size_t Free(Address start, size_t size_in_bytes, FreeMode mode) override;
+
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size) override;
+
+ private:
+  static const size_t kMinBlockSize = 3 * kTaggedSize;
+
+  // This is a conservative upper bound. The actual maximum block size takes
+  // padding and alignment of data and code pages into account.
+  static const size_t kMaxBlockSize = Page::kPageSize;
+
+  // perl -E '@cat = map {$_*8} 3..32,64,128,256,511,512,1024,2048,4096,8192;
+  // say join ", ", @cat; say scalar @cat'
+  static const size_t categories_max[40];
+
+  // Tries to retrieve a node from the first category in a given |type|.
+  // Returns nullptr if the category is empty or the top entry is smaller
+  // than minimum_size.
+  FreeSpace TryFindNodeIn(FreeListCategoryType type, size_t minimum_size,
+                          size_t* node_size);
+
+  // Searches a given |type| for a node of at least |minimum_size|.
+  FreeSpace SearchForNodeInList(FreeListCategoryType type, size_t* node_size,
+                                size_t minimum_size);
+
+
+  FreeListCategoryType SelectFreeListCategoryType(
+      size_t size_in_bytes) {
+    for (int cat = kFirstCategory; cat < last_category_; cat++) {
+      if (size_in_bytes <= categories_max[cat]) {
+        return cat;
+      }
+    }
+    return last_category_;
+  }
+
+  Page* GetPageForCategoryType(FreeListCategoryType type) {
+    return top(type) ? top(type)->page() : nullptr;
+  }
+
+  friend class FreeListCategory;
+  friend class heap::HeapTester;
+};
+
+
+
 // LocalAllocationBuffer represents a linear allocation area that is created
 // from a given {AllocationResult} and can be used to allocate memory without
 // synchronization.

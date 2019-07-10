@@ -3008,6 +3008,8 @@ void FreeListCategory::Relink() {
 FreeList* FreeList::CreateFreeList() {
   if (FLAG_gc_experiment_fast_alloc) {
     return new FreeListFastAlloc();
+  } else if (FLAG_gc_experiment_many_freelists) {
+    return new FreeListMany();
   } else {
     return new FreeListLegacy();
   }
@@ -3186,6 +3188,78 @@ FreeSpace FreeListFastAlloc::Allocate(size_t size_in_bytes, size_t* node_size) {
   // bump-pointer allocations).
   FreeListCategoryType type = SelectFreeListCategoryType(size_in_bytes);
   for (int i = kHuge; i >= type && node.is_null(); i--) {
+    node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                         node_size);
+  }
+
+  if (!node.is_null()) {
+    Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+  }
+
+  DCHECK(IsVeryLong() || Available() == SumFreeLists());
+  return node;
+}
+
+const size_t FreeListMany::categories_max[40] = {
+    24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144,
+    152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256,
+    512, 1024, 2048, 4088, 4096, 8192, 16384, 32768, 65536, kMaxBlockSize
+};
+
+FreeListMany::FreeListMany() {
+  wasted_bytes_ = 0;
+  number_of_categories_ = 40;
+  last_category_ = number_of_categories_ - 1;
+
+  categories_ = new FreeListCategory*[number_of_categories_]();
+  Reset();
+}
+
+FreeListMany::~FreeListMany() { delete[] categories_; }
+
+size_t FreeListMany::Free(Address start, size_t size_in_bytes,
+                            FreeMode mode) {
+  Page* page = Page::FromAddress(start);
+  page->DecreaseAllocatedBytes(size_in_bytes);
+
+  // Blocks have to be a minimum size to hold free list items.
+  if (size_in_bytes < kMinBlockSize) {
+    page->add_wasted_memory(size_in_bytes);
+    wasted_bytes_ += size_in_bytes;
+    return size_in_bytes;
+  }
+
+  // Insert other blocks at the head of a free list of the appropriate
+  // magnitude.
+  FreeListCategoryType type = SelectFreeListCategoryType(size_in_bytes);
+  page->free_list_category(type)->Free(start, size_in_bytes, mode);
+  DCHECK_EQ(page->AvailableInFreeList(),
+            page->AvailableInFreeListFromAllocatedBytes());
+  return 0;
+}
+
+FreeSpace FreeListMany::TryFindNodeIn(FreeListCategoryType type,
+                                        size_t minimum_size,
+                                        size_t* node_size) {
+  FreeListCategory* category = categories_[type];
+  if (category == nullptr) return FreeSpace();
+  FreeSpace node = category->PickNodeFromList(minimum_size, node_size);
+  if (!node.is_null()) {
+    DCHECK(IsVeryLong() || Available() == SumFreeLists());
+  }
+  if (category->is_empty()) {
+    RemoveCategory(category);
+  }
+  return node;
+}
+
+FreeSpace FreeListMany::Allocate(size_t size_in_bytes, size_t* node_size) {
+  DCHECK_GE(kMaxBlockSize, size_in_bytes);
+  FreeSpace node;
+  // First try the allocation fast path: try to allocate the minimum element
+  // size of a free list category. This operation is constant time.
+  FreeListCategoryType type = SelectFreeListCategoryType(size_in_bytes);
+  for (int i = type; i <= last_category_ && node.is_null(); i++) {
     node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
                          node_size);
   }
