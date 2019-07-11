@@ -782,6 +782,8 @@ DEFINE_BOOL(trace_gc_freelists_verbose, false,
 DEFINE_IMPLICATION(trace_gc_freelists_verbose, trace_gc_freelists)
 DEFINE_BOOL(trace_evacuation_candidates, false,
             "Show statistics about the pages evacuation by the compaction")
+DEFINE_BOOL(trace_gc_linear_area_discarded, false,
+            "Print each time the linear allocation area is discared")
 
 DEFINE_INT(trace_allocation_stack_interval, -1,
            "print stack trace after <n> free-list allocations")
