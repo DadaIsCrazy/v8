@@ -1890,6 +1890,10 @@ void PagedSpace::FreeLinearAllocationArea() {
     return;
   }
 
+  if (FLAG_trace_gc_linear_area_discarded) {
+    PrintIsolate(heap()->isolate(), "FreeLinearAllocationArea: %zu bytes remained.\n", current_limit - current_top);
+  }
+
   if (heap()->incremental_marking()->black_allocation()) {
     Page* page = Page::FromAllocationAreaAddress(current_top);
 
