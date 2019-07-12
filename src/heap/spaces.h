@@ -1961,28 +1961,9 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
  public:
   // This method returns how much memory can be allocated after freeing
   // maximum_freed memory.
-  size_t GuaranteedAllocatable(size_t maximum_freed) override {
-    if (maximum_freed <= categories_max[0]) {
-      return 0;
-    }
-    for (int cat = kFirstCategory + 1; cat < last_category_; cat++) {
-      if (maximum_freed <= categories_max[cat]) {
-        return categories_max[cat - 1];
-      }
-    }
-    return maximum_freed;
-  }
+  size_t GuaranteedAllocatable(size_t maximum_freed) override;
 
-  Page* GetPageForSize(size_t size_in_bytes) override {
-    const int minimum_category =
-        static_cast<int>(SelectFreeListCategoryType(size_in_bytes));
-    Page* page = GetPageForCategoryType(last_category_);
-    for (int cat = last_category_ - 1; !page && cat >= minimum_category;
-         cat--) {
-      page = GetPageForCategoryType(cat);
-    }
-    return page;
-  }
+  Page* GetPageForSize(size_t size_in_bytes) override;
 
   FreeListMany();
   ~FreeListMany();

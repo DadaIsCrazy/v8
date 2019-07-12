@@ -3197,6 +3197,28 @@ FreeListMany::FreeListMany() {
   Reset();
 }
 
+size_t FreeListMany::GuaranteedAllocatable(size_t maximum_freed) {
+  if (maximum_freed <= categories_max[0]) {
+    return 0;
+  }
+  for (int cat = kFirstCategory + 1; cat < last_category_; cat++) {
+    if (maximum_freed <= categories_max[cat]) {
+      return categories_max[cat - 1];
+    }
+  }
+  return maximum_freed;
+}
+
+Page* FreeListMany::GetPageForSize(size_t size_in_bytes) {
+  const int minimum_category =
+      static_cast<int>(SelectFreeListCategoryType(size_in_bytes));
+  Page* page = GetPageForCategoryType(last_category_);
+  for (int cat = last_category_ - 1; !page && cat >= minimum_category; cat--) {
+    page = GetPageForCategoryType(cat);
+  }
+  return page;
+}
+
 FreeListMany::~FreeListMany() { delete[] categories_; }
 
 size_t FreeListMany::Free(Address start, size_t size_in_bytes, FreeMode mode) {
