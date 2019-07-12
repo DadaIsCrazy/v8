@@ -663,6 +663,27 @@ void MarkCompactCollector::CollectEvacuationCandidates(PagedSpace* space) {
     free_bytes_threshold = target_fragmentation_percent * (area_size / 100);
   }
 
+  if (FLAG_gc_experiment_freelist_based_evac) {
+    size_t total_live_bytes = 0;
+    int cnt = 0;
+    for (int i = space->free_list()->last_category();
+         total_live_bytes < max_evacuated_bytes && i >= kFirstCategory; i--) {
+      FreeListCategory* cat = space->free_list()->top(i);
+      while (cat != nullptr && total_live_bytes < max_evacuated_bytes) {
+        cnt++;
+        Page* p = cat->page();
+        if (!p->IsEvacuationCandidate() &&
+            area_size - p->allocated_bytes() >= free_bytes_threshold) {
+          AddEvacuationCandidate(p);
+          total_live_bytes += p->allocated_bytes();
+        }
+        cat = cat->next();
+      }
+    }
+    printf("Considered %d things.\n", cnt);
+    return;
+  }
+
   // Pairs of (live_bytes_in_page, page).
   using LiveBytesPagePair = std::pair<size_t, Page*>;
   std::vector<LiveBytesPagePair> pages;
@@ -673,6 +694,7 @@ void MarkCompactCollector::CollectEvacuationCandidates(PagedSpace* space) {
       space->top() == space->limit()
           ? nullptr
           : Page::FromAllocationAreaAddress(space->top());
+  int cnt = 0;
   for (Page* p : *space) {
     if (p->NeverEvacuate() || (p == owner_of_linear_allocation_area) ||
         !p->CanAllocate())
@@ -690,12 +712,14 @@ void MarkCompactCollector::CollectEvacuationCandidates(PagedSpace* space) {
       // Only the pages with at more than |free_bytes_threshold| free bytes are
       // considered for evacuation.
       if (area_size - p->allocated_bytes() >= free_bytes_threshold) {
+        cnt++;
         pages.push_back(std::make_pair(p->allocated_bytes(), p));
       }
     } else {
       pages.push_back(std::make_pair(p->allocated_bytes(), p));
     }
   }
+  printf("Considered %d candidates.\n", cnt);
 
   int candidate_count = 0;
   size_t total_live_bytes = 0;
@@ -761,6 +785,8 @@ void MarkCompactCollector::CollectEvacuationCandidates(PagedSpace* space) {
                      total_live_bytes / KB, max_evacuated_bytes / KB);
       }
     }
+    printf("Select %d candidates (would have like to release %zu more KB)\n", candidate_count,
+           (max_evacuated_bytes-total_live_bytes) / KB);
     // How many pages we will allocated for the evacuated objects
     // in the worst case: ceil(total_live_bytes / area_size)
     int estimated_new_pages =

@@ -184,6 +184,8 @@ class FreeListCategory {
   size_t SumFreeList();
   int FreeListLength() { return length_; }
 
+  FreeListCategory* next() { return next_; }
+
  private:
   // For debug builds we accurately compute free lists lengths up until
   // {kVeryLongFreeList} by manually walking the list.
@@ -193,7 +195,6 @@ class FreeListCategory {
   void set_top(FreeSpace top) { top_ = top; }
   FreeListCategory* prev() { return prev_; }
   void set_prev(FreeListCategory* prev) { prev_ = prev; }
-  FreeListCategory* next() { return next_; }
   void set_next(FreeListCategory* next) { next_ = next; }
 
   // This FreeListCategory is owned by the given free_list_.
@@ -242,6 +243,8 @@ class FreeList {
   virtual size_t Free(Address start, size_t size_in_bytes, FreeMode mode) = 0;
   virtual V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                                    size_t* node_size) = 0;
+
+  virtual approximate_size(FreeListCategory** categories);
 
   // Returns a page containing an entry for a given type, or nullptr otherwise.
   V8_EXPORT_PRIVATE virtual Page* GetPageForSize(size_t size_in_bytes) = 0;
@@ -297,6 +300,10 @@ class FreeList {
   V8_EXPORT_PRIVATE void RemoveCategory(FreeListCategory* category);
   void PrintCategories(FreeListCategoryType type);
 
+  FreeListCategory* top(FreeListCategoryType type) const {
+    return categories_[type];
+  }
+
 #ifdef DEBUG
   size_t SumFreeLists();
   bool IsVeryLong();
@@ -321,9 +328,6 @@ class FreeList {
     FreeListCategory* current_;
   };
 
-  FreeListCategory* top(FreeListCategoryType type) const {
-    return categories_[type];
-  }
 
   int number_of_categories_;
   FreeListCategoryType last_category_;
