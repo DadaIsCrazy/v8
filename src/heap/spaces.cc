@@ -3187,7 +3187,6 @@ size_t FreeListMany::GuaranteedAllocatable(size_t maximum_freed) {
   if (maximum_freed < categories_max[0]) {
     return 0;
   }
-  DCHECK(categories_max[0] == kMinBlockSize);
   for (int cat = kFirstCategory + 1; cat < last_category_; cat++) {
     if (maximum_freed <= categories_max[cat]) {
       return categories_max[cat - 1];
