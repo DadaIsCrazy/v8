@@ -3372,6 +3372,10 @@ FreeSpace FreeListDart::HeuristicSearchCategory(size_t size_in_bytes,
         if (previous.is_null()) {
           category->set_top(current.next());
         } else {
+          MemoryChunk* chunk = MemoryChunk::FromHeapObject(previous);
+          if (chunk->owner_identity() == CODE_SPACE) {
+            chunk->heap()->UnprotectAndRegisterMemoryChunk(chunk);
+          }
           previous.set_next(current.next());
         }
         *node_size = current.Size();
