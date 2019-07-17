@@ -3164,14 +3164,12 @@ FreeSpace FreeListFastAlloc::Allocate(size_t size_in_bytes, size_t* node_size) {
 
 // Cf. the declaration of |categories_max| in |spaces.h| to see how this is
 // computed.
-const size_t FreeListMany::categories_max[kNumberOfCategories] = {
-    24,    32,    40,    48,    56,    64,    72,
-    80,    88,    96,    104,   112,   120,   128,
-    136,   144,   152,   160,   168,   176,   184,
-    192,   200,   208,   216,   224,   232,   240,
-    248,   256,   384,   512,   768,   1024,  1536,
-    2048,  3072,  4080,  4088,  4096,  6144,  8192,
-    12288, 16384, 24576, 32768, 49152, 65536, Page::kPageSize};
+const size_t FreeListMany::categories_min[kNumberOfCategories] = {
+    24,   32,   40,    48,    56,    64,    72,    80,   88,   96,
+    104,  112,  120,   128,   136,   144,   152,   160,  168,  176,
+    184,  192,  200,   208,   216,   224,   232,   240,  248,  256,
+    384,  512,  768,   1024,  1536,  2048,  3072,  4080, 4088, 4096,
+    6144, 8192, 12288, 16384, 24576, 32768, 49152, 65536};
 
 FreeListMany::FreeListMany() {
   // Initializing base (FreeList) fields
@@ -3187,10 +3185,9 @@ size_t FreeListMany::GuaranteedAllocatable(size_t maximum_freed) {
   if (maximum_freed < categories_max[0]) {
     return 0;
   }
-  for (int cat = kFirstCategory + 1; cat < last_category_; cat++) {
-    if (maximum_freed <= categories_max[cat]) {
-      return categories_max[cat - 1];
-    }
+  int cat = SelectFreeListCategoryType(maximum_freed);
+  if (cat != last_category_) {
+    return categories_min[cat];
   }
   return maximum_freed;
 }
