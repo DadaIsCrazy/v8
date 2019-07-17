@@ -787,7 +787,7 @@ DEFINE_BOOL(trace_gc_freelists_verbose, false,
 DEFINE_IMPLICATION(trace_gc_freelists_verbose, trace_gc_freelists)
 DEFINE_BOOL(trace_evacuation_candidates, false,
             "Show statistics about the pages evacuation by the compaction")
-DEFINE_INT(gc_freelist_strategy, 2,
+DEFINE_INT(gc_freelist_strategy, 1,
            "Freelist strategy to use: "
            "1=FreeListFastAlloc. 2=FreeListMany. Anything else=FreeListLegacy")
 
