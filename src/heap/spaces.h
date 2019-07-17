@@ -1980,7 +1980,7 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                            size_t* node_size) override;
 
- private:
+ protected:
   static const size_t kMinBlockSize = 3 * kTaggedSize;
 
   // This is a conservative upper bound. The actual maximum block size takes
@@ -2036,6 +2036,62 @@ class V8_EXPORT_PRIVATE FreeListMap : public FreeList {
   FreeListCategoryType SelectFreeListCategoryType(
       size_t size_in_bytes) override {
     return kOnlyCategory;
+  }
+};
+
+// Uses the same FreeLists as FreeListMany, but uses a fast path for allocation,
+// in order to still benefit from bump-pointer style allocation. Concretely,
+// greater categories are considered first when allocating, and we fall back to
+// smaller one only then.
+// Hopefully, this should keep memory low (with little fragmention), and
+// performances high.
+class V8_EXPORT_PRIVATE FreeListManyFast : public FreeListMany {
+ public:
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size) override;
+
+ private:
+  // Objects in the 36th category are at least 2056 bytes
+  static const FreeListCategoryType kFastPathFirstCategory = 36;
+  static const size_t kSmallObjectMaxSize = 256;
+  static const size_t kTinyObjectMaxSize = 48;
+  // Objects in the 29th category are at most 256 bytes
+  static const FreeListCategoryType kFastPathFallBackTiny = 29;
+
+  // Return the smallest category that could hold |size_in_bytes| bytes.
+  FreeListCategoryType SelectFreeListCategoryType(
+      size_t size_in_bytes) override {
+    if (size_in_bytes <= 256) {
+      if (size_in_bytes <= 24) return 0;
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 3) - 3;
+    }
+    for (int cat = (256 >> 3) - 3; cat < last_category_; cat++) {
+      if (size_in_bytes <= categories_max[cat]) {
+        return cat;
+      }
+    }
+    return last_category_;
+  }
+
+  // The goal of the fast path if to enable bump-pointer allocations for the
+  // next few allocations. Concretely, the categories are searched using this
+  // heuristic:
+  //  - start by searching categories from kFastPathFirstCategory
+  //  - don't start the last categories for small objects (kSmallObjectMaxSize)
+  //  - always try to overallocate
+  //  - if the fast path didn't find any element, try the other categories, in
+  //    descending order (ie, down from kFastPathFirstCategory-1 to
+  //    SelectFreeListCategoryType(size_in_bytes).
+  FreeListCategoryType SelectFastAllocationFreeListCategoryType(
+      size_t size_in_bytes) {
+    DCHECK(size_in_bytes < categories_max[last_category_]);
+
+    for (int cat = kFastPathFirstCategory; cat < last_category_; cat++) {
+      if (size_in_bytes <= categories_max[cat - 1]) {
+        return cat;
+      }
+    }
+    return last_category_;
   }
 };
 

@@ -825,7 +825,10 @@ DEFINE_BOOL(
     "Combine with --no-inline-new to track allocations from generated code")
 DEFINE_INT(gc_freelist_strategy, 0,
            "Freelist strategy to use: "
-           "1=FreeListFastAlloc. 2=FreeListMany. Anything else=FreeListLegacy")
+           "0=FreeListLegacy (default). "
+           "1=FreeListFastAlloc. "
+           "2=FreeListMany. "
+           "3=FreeListManyFast.")
 
 DEFINE_INT(trace_allocation_stack_interval, -1,
            "print stack trace after <n> free-list allocations")

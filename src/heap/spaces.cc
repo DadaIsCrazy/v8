@@ -3273,6 +3273,48 @@ FreeSpace FreeListMap::Allocate(size_t size_in_bytes, size_t* node_size) {
 }
 
 // ------------------------------------------------
+// FreeListManyFast implementation
+
+FreeSpace FreeListManyFast::Allocate(size_t size_in_bytes, size_t* node_size) {
+  DCHECK_GE(kMaxBlockSize, size_in_bytes);
+  FreeSpace node;
+
+  // First, try the fast path.
+  FreeListCategoryType last_cat_fast_alloc =
+      size_in_bytes < kSmallObjectMaxSize ? last_category_ - 1 : last_category_;
+  FreeListCategoryType type =
+      SelectFastAllocationFreeListCategoryType(size_in_bytes);
+  for (int i = type; i <= last_cat_fast_alloc && node.is_null(); i++) {
+    node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                         node_size);
+  }
+
+  if (node.is_null()) {
+    // Then, try the smaller categories (from largest to smallest)
+    FreeListCategoryType smallest_type =
+        SelectFreeListCategoryType(size_in_bytes);
+    FreeListCategoryType start_type =
+        size_in_bytes <= kTinyObjectMaxSize ? kFastPathFallBackTiny : type - 1;
+    for (int i = start_type; i >= smallest_type && node.is_null(); i--) {
+      node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                           node_size);
+    }
+  }
+
+  if (node.is_null()) {
+    // Iterating through the largest category
+    node = SearchForNodeInList(last_category_, size_in_bytes, node_size);
+  }
+
+  if (!node.is_null()) {
+    Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+  }
+
+  DCHECK(IsVeryLong() || Available() == SumFreeLists());
+  return node;
+}
+
+// ------------------------------------------------
 // Generic FreeList methods (non alloc/free related)
 
 void FreeList::Reset() {
