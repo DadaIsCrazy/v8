@@ -3053,12 +3053,12 @@ size_t FreeList::Free(Address start, size_t size_in_bytes, FreeMode mode) {
 // FreeListLegacy implementation
 
 FreeListLegacy::FreeListLegacy() {
-  wasted_bytes_ = 0;
+  // Initializing base (FreeList) fields
   number_of_categories_ = kHuge + 1;
   last_category_ = kHuge;
   min_block_size_ = kMinBlockSize;
-
   categories_ = new FreeListCategory*[number_of_categories_]();
+
   Reset();
 }
 
@@ -3111,12 +3111,12 @@ FreeSpace FreeListLegacy::Allocate(size_t size_in_bytes, size_t* node_size) {
 // FreeListFastAlloc implementation
 
 FreeListFastAlloc::FreeListFastAlloc() {
-  wasted_bytes_ = 0;
+  // Initializing base (FreeList) fields
   number_of_categories_ = kHuge + 1;
   last_category_ = kHuge;
   min_block_size_ = kMinBlockSize;
-
   categories_ = new FreeListCategory*[number_of_categories_]();
+
   Reset();
 }
 
@@ -3156,12 +3156,12 @@ const size_t FreeListMany::categories_max[kNumberOfCategories] = {
     12288, 16384, 24576, 32768, 49152, 65536, Page::kPageSize};
 
 FreeListMany::FreeListMany() {
-  wasted_bytes_ = 0;
+  // Initializing base (FreeList) fields
   number_of_categories_ = kNumberOfCategories;
   last_category_ = number_of_categories_ - 1;
   min_block_size_ = kMinBlockSize;
-
   categories_ = new FreeListCategory*[number_of_categories_]();
+
   Reset();
 }
 

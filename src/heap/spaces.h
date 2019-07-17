@@ -359,12 +359,12 @@ class FreeList {
     return top(type) ? top(type)->page() : nullptr;
   }
 
-  int number_of_categories_;
-  FreeListCategoryType last_category_;
-  size_t min_block_size_;
+  int number_of_categories_ = 0;
+  FreeListCategoryType last_category_ = 0;
+  size_t min_block_size_ = 0;
 
-  std::atomic<size_t> wasted_bytes_;
-  FreeListCategory** categories_;
+  std::atomic<size_t> wasted_bytes_{0};
+  FreeListCategory** categories_ = nullptr;
 
   friend class FreeListCategory;
   friend class Page;
@@ -1834,7 +1834,7 @@ class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                            size_t* node_size) override;
 
- protected:
+ private:
   enum { kTiniest, kTiny, kSmall, kMedium, kLarge, kHuge };
 
   static const size_t kMinBlockSize = 3 * kTaggedSize;
@@ -1926,7 +1926,7 @@ class V8_EXPORT_PRIVATE FreeListFastAlloc : public FreeList {
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                            size_t* node_size) override;
 
- protected:
+ private:
   enum { kMedium, kLarge, kHuge };
 
   static const size_t kMinBlockSize = 0xff * kTaggedSize;
@@ -1975,7 +1975,7 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                            size_t* node_size) override;
 
- protected:
+ private:
   static const size_t kMinBlockSize = 3 * kTaggedSize;
 
   // This is a conservative upper bound. The actual maximum block size takes
