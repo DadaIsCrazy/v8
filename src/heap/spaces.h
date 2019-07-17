@@ -1957,7 +1957,7 @@ class V8_EXPORT_PRIVATE FreeListFastAlloc : public FreeList {
   }
 };
 
-// Use 48 Freelists: on per size between 24 and 256, and then a few ones for
+// Use 49 Freelists: on per size between 24 and 256, and then a few ones for
 // larger sizes. See the variable |categories_max| for the size of each
 // Freelist.  Allocation is done using a best-fit strategy (considering only the
 // first element of each category though).
@@ -1990,18 +1990,19 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
   //   }
   //   push @cat, 4080, 4088;
   //   @cat = sort { $a <=> $b } @cat;
+  //   push @cat, "Page::kPageSize";
   //   say join ", ", @cat;
   //   say "\n", scalar @cat'
   // Note the special case for 4080 and 4088 bytes: experiments have shown that
   // this category classes are more used than others of similar sizes
-  static const int kNumberOfCategories = 48;
-  static const size_t categories_min[kNumberOfCategories];
+  static const int kNumberOfCategories = 49;
+  static const size_t categories_max[kNumberOfCategories];
 
   // Return the smallest category that could hold |size_in_bytes| bytes.
   FreeListCategoryType SelectFreeListCategoryType(
       size_t size_in_bytes) override {
     for (int cat = kFirstCategory; cat < last_category_; cat++) {
-      if (size_in_bytes < categories_min[cat + 1]) {
+      if (size_in_bytes <= categories_max[cat]) {
         return cat;
       }
     }
