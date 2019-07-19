@@ -1839,7 +1839,7 @@ class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                            size_t* node_size) override;
 
- private:
+ protected:
   enum { kTiniest, kTiny, kSmall, kMedium, kLarge, kHuge };
 
   static const size_t kMinBlockSize = 3 * kTaggedSize;
@@ -1848,11 +1848,12 @@ class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
   // padding and alignment of data and code pages into account.
   static const size_t kMaxBlockSize = Page::kPageSize;
 
-  static const size_t kTiniestListMax = 0xa * kTaggedSize;
-  static const size_t kTinyListMax = 0x1f * kTaggedSize;
-  static const size_t kSmallListMax = 0xff * kTaggedSize;
-  static const size_t kMediumListMax = 0x7ff * kTaggedSize;
-  static const size_t kLargeListMax = 0x1fff * kTaggedSize;
+  // 24
+  static const size_t kTiniestListMax = 0xa * kTaggedSize;   // 80
+  static const size_t kTinyListMax = 0x1f * kTaggedSize;     // 248
+  static const size_t kSmallListMax = 0xff * kTaggedSize;    // 2048
+  static const size_t kMediumListMax = 0x7ff * kTaggedSize;  // 16376
+  static const size_t kLargeListMax = 0x1fff * kTaggedSize;  // 65528
   static const size_t kTinyAllocationMax = kTiniestListMax;
   static const size_t kSmallAllocationMax = kTinyListMax;
   static const size_t kMediumAllocationMax = kSmallListMax;
@@ -1890,6 +1891,12 @@ class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
 
   friend class FreeListCategory;
   friend class heap::HeapTester;
+};
+
+// Like FreeListLegacy, but without fast path
+class V8_EXPORT_PRIVATE FreeListLegacySlowPath : public FreeListLegacy {
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size) override;
 };
 
 // Inspired by FreeListLegacy.
@@ -1993,14 +2000,58 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
   //   while ($cat[-1] <= 32768) {
   //     push @cat, $cat[-1]+$cat[-3], $cat[-1]*2
   //   }
-  //   push @cat, 4080, 4088;
   //   @cat = sort { $a <=> $b } @cat;
   //   push @cat, "Page::kPageSize";
   //   say join ", ", @cat;
   //   say "\n", scalar @cat'
-  // Note the special case for 4080 and 4088 bytes: experiments have shown that
-  // this category classes are more used than others of similar sizes
-  static const int kNumberOfCategories = 49;
+  static const int kNumberOfCategories = 47;
+  static const size_t categories_max[kNumberOfCategories];
+
+  // Return the smallest category that could hold |size_in_bytes| bytes.
+  FreeListCategoryType SelectFreeListCategoryType(
+      size_t size_in_bytes) override {
+    for (int cat = kFirstCategory; cat < last_category_; cat++) {
+      if (size_in_bytes <= categories_max[cat]) {
+        return cat;
+      }
+    }
+    return last_category_;
+  }
+};
+
+// Uses half less FreeList than FreeListMany. The idea being that iterating
+// through all categories might be a bit expensive time-wisem and reducing the
+// number of categories might reduce the time spent in Allocate.
+class V8_EXPORT_PRIVATE FreeListHalfMany : public FreeListMany {
+ public:
+  size_t GuaranteedAllocatable(size_t maximum_freed) override;
+
+  Page* GetPageForSize(size_t size_in_bytes) override;
+
+  FreeListHalfMany();
+  ~FreeListHalfMany();
+
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size) override;
+
+ protected:
+  static const size_t kMinBlockSize = 3 * kTaggedSize;
+
+  // This is a conservative upper bound. The actual maximum block size takes
+  // padding and alignment of data and code pages into account.
+  static const size_t kMaxBlockSize = Page::kPageSize;
+
+  // Categories boundaries generated with:
+  // perl -E '
+  //   @cat = map {$_*8} 3..32, 48, 64;
+  //   while ($cat[-1] <= 32768) {
+  //     push @cat, $cat[-1]+$cat[-3], $cat[-1]*2
+  //   }
+  //   @cat = grep { $i++ % 2 } @cat; // <-- Not in FreeListMany
+  //   push @cat, "Page::kPageSize";
+  //   say join ", ", @cat;
+  //   say "\n", scalar @cat'
+  static const int kNumberOfCategories = 24;
   static const size_t categories_max[kNumberOfCategories];
 
   // Return the smallest category that could hold |size_in_bytes| bytes.
@@ -2039,6 +2090,14 @@ class V8_EXPORT_PRIVATE FreeListMap : public FreeList {
   }
 };
 
+// Like FreeListMany, but tries to return twice the size requested for
+// allocation.
+class V8_EXPORT_PRIVATE FreeListMany2x : public FreeListMany {
+ public:
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size) override;
+};
+
 // Uses the same FreeLists as FreeListMany, but uses a fast path for allocation,
 // in order to still benefit from bump-pointer style allocation. Concretely,
 // greater categories are considered first when allocating, and we fall back to
@@ -2050,7 +2109,7 @@ class V8_EXPORT_PRIVATE FreeListManyFast : public FreeListMany {
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                            size_t* node_size) override;
 
- private:
+ protected:
   // Objects in the 36th category are at least 2056 bytes
   static const FreeListCategoryType kFastPathFirstCategory = 36;
   static const size_t kSmallObjectMaxSize = 256;
@@ -2093,6 +2152,32 @@ class V8_EXPORT_PRIVATE FreeListManyFast : public FreeListMany {
     }
     return last_category_;
   }
+};
+
+// Kind of a mix between FreeListMany and FreeListManyFast. Here, the fast path
+// starting index changes over time (based on variable |start_fast_path_|). The
+// goal is to use more the low categories, in order to keep memory low, while
+// still benefitting from a fast path.
+class V8_EXPORT_PRIVATE FreeListManyFastMoving : public FreeListManyFast {
+ public:
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size) override;
+
+ private:
+  std::atomic<int> start_fast_path_{0};
+};
+
+// Uses the fast path half the time, and the slow path the other half.
+class V8_EXPORT_PRIVATE FreeListManyHalfFast : public FreeListManyFast {
+ public:
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size) override;
+
+ private:
+  // Note: does that really need to be protected? It doesn't matter if a few
+  // allocations use the fast (resp. slow) path instead of the slow (resp fast)
+  // one...
+  std::atomic<bool> fast_path_{true};
 };
 
 // LocalAllocationBuffer represents a linear allocation area that is created

@@ -3005,12 +3005,27 @@ void FreeListCategory::Relink() {
 // Generic FreeList methods (alloc/free related)
 
 FreeList* FreeList::CreateFreeList() {
-  if (FLAG_gc_freelist_strategy == 1) {
-    return new FreeListFastAlloc();
-  } else if (FLAG_gc_freelist_strategy == 2) {
-    return new FreeListMany();
-  } else {
-    return new FreeListLegacy();
+  switch (FLAG_gc_freelist_strategy) {
+    case 0:
+      return new FreeListLegacy();
+    case 1:
+      return new FreeListFastAlloc();
+    case 2:
+      return new FreeListMany();
+    case 3:
+      return new FreeListManyFast();
+    case 4:
+      return new FreeListManyFastMoving();
+    case 5:
+      return new FreeListManyHalfFast();
+    case 6:
+      return new FreeListMany2x();
+    case 7:
+      return new FreeListLegacySlowPath();
+    case 8:
+      return new FreeListHalfMany();
+    default:
+      return new FreeListLegacy();
   }
 }
 
@@ -3126,6 +3141,34 @@ FreeSpace FreeListLegacy::Allocate(size_t size_in_bytes, size_t* node_size) {
 }
 
 // ------------------------------------------------
+// FreeListLegacySlowPath implementation
+
+FreeSpace FreeListLegacySlowPath::Allocate(size_t size_in_bytes,
+                                           size_t* node_size) {
+  DCHECK_GE(kMaxBlockSize, size_in_bytes);
+  FreeSpace node;
+  // First try the allocation fast path: try to allocate the minimum element
+  // size of a free list category. This operation is constant time.
+  FreeListCategoryType type = SelectFreeListCategoryType(size_in_bytes);
+  for (int i = type; i < kHuge && node.is_null(); i++) {
+    node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                         node_size);
+  }
+
+  if (node.is_null()) {
+    // Next search the huge list for free list nodes. This takes linear time in
+    // the number of huge elements.
+    node = SearchForNodeInList(kHuge, size_in_bytes, node_size);
+  }
+
+  if (!node.is_null()) {
+    Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+  }
+
+  DCHECK(IsVeryLong() || Available() == SumFreeLists());
+  return node;
+}
+// ------------------------------------------------
 // FreeListFastAlloc implementation
 
 FreeListFastAlloc::FreeListFastAlloc() {
@@ -3165,13 +3208,53 @@ FreeSpace FreeListFastAlloc::Allocate(size_t size_in_bytes, size_t* node_size) {
 // Cf. the declaration of |categories_max| in |spaces.h| to see how this is
 // computed.
 const size_t FreeListMany::categories_max[kNumberOfCategories] = {
-    24,    32,    40,    48,    56,    64,    72,
-    80,    88,    96,    104,   112,   120,   128,
-    136,   144,   152,   160,   168,   176,   184,
-    192,   200,   208,   216,   224,   232,   240,
-    248,   256,   384,   512,   768,   1024,  1536,
-    2048,  3072,  4080,  4088,  4096,  6144,  8192,
-    12288, 16384, 24576, 32768, 49152, 65536, Page::kPageSize};
+    24,
+    32,
+    40,
+    48,
+    56,
+    64,
+    72,
+    80,
+    88,
+    96,
+    104,
+    112,
+    120,
+    128,
+    136,
+    144,
+    152,
+    160,
+    168,
+    176,
+    184,
+    192,
+    200,
+    208,
+    216,
+    224,
+    232,
+    240,
+    248,
+    256,
+    384,
+    512,
+    768,
+    1024,
+    1536,
+    2048,
+    3072,
+    4096,
+    6144,
+    8192,
+    12288,
+    16384,
+    24576,
+    32768,
+    49152,
+    65536,
+    Page::kPageSize};
 
 FreeListMany::FreeListMany() {
   // Initializing base (FreeList) fields
@@ -3273,6 +3356,96 @@ FreeSpace FreeListMap::Allocate(size_t size_in_bytes, size_t* node_size) {
 }
 
 // ------------------------------------------------
+// FreeListHalfMany implementation
+
+// Cf. the declaration of |categories_max| in |spaces.h| to see how this is
+// computed.
+const size_t FreeListHalfMany::categories_max[kNumberOfCategories] = {
+    32,   48,   64,   80,   96,    112,   128,   144,
+    160,  176,  192,  208,  224,   240,   256,   512,
+    1024, 2048, 4096, 8192, 16384, 32768, 65536, Page::kPageSize};
+
+FreeListHalfMany::FreeListHalfMany() {
+  // Initializing base (FreeList) fields
+  number_of_categories_ = kNumberOfCategories;
+  last_category_ = number_of_categories_ - 1;
+  min_block_size_ = kMinBlockSize;
+  categories_ = new FreeListCategory*[number_of_categories_]();
+
+  Reset();
+}
+
+size_t FreeListHalfMany::GuaranteedAllocatable(size_t maximum_freed) {
+  if (maximum_freed < categories_max[0]) {
+    return 0;
+  }
+  for (int cat = kFirstCategory + 1; cat < last_category_; cat++) {
+    if (maximum_freed <= categories_max[cat]) {
+      return categories_max[cat - 1];
+    }
+  }
+  return maximum_freed;
+}
+
+Page* FreeListHalfMany::GetPageForSize(size_t size_in_bytes) {
+  const int minimum_category =
+      static_cast<int>(SelectFreeListCategoryType(size_in_bytes));
+  Page* page = GetPageForCategoryType(last_category_);
+  for (int cat = last_category_ - 1; !page && cat >= minimum_category; cat--) {
+    page = GetPageForCategoryType(cat);
+  }
+  return page;
+}
+
+FreeListHalfMany::~FreeListHalfMany() { delete[] categories_; }
+
+FreeSpace FreeListHalfMany::Allocate(size_t size_in_bytes, size_t* node_size) {
+  DCHECK_GE(kMaxBlockSize, size_in_bytes);
+  FreeSpace node;
+  FreeListCategoryType type = SelectFreeListCategoryType(size_in_bytes);
+  for (int i = type; i < last_category_ && node.is_null(); i++) {
+    node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                         node_size);
+  }
+
+  if (node.is_null()) {
+    // Searching each element of the last category.
+    node = SearchForNodeInList(last_category_, size_in_bytes, node_size);
+  }
+
+  if (!node.is_null()) {
+    Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+  }
+
+  DCHECK(IsVeryLong() || Available() == SumFreeLists());
+  return node;
+}
+
+// ------------------------------------------------
+// FreeListMany2x implementation
+
+FreeSpace FreeListMany2x::Allocate(size_t size_in_bytes, size_t* node_size) {
+  DCHECK_GE(kMaxBlockSize, size_in_bytes);
+  FreeSpace node;
+
+  if (size_in_bytes < 256) {
+    FreeListCategoryType type = SelectFreeListCategoryType(size_in_bytes * 2);
+    node = TryFindNodeIn(type, size_in_bytes, node_size);
+  }
+
+  if (node.is_null()) {
+    return FreeListMany::Allocate(size_in_bytes, node_size);
+  }
+
+  if (!node.is_null()) {
+    Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+  }
+
+  DCHECK(IsVeryLong() || Available() == SumFreeLists());
+  return node;
+}
+
+// ------------------------------------------------
 // FreeListManyFast implementation
 
 FreeSpace FreeListManyFast::Allocate(size_t size_in_bytes, size_t* node_size) {
@@ -3312,6 +3485,64 @@ FreeSpace FreeListManyFast::Allocate(size_t size_in_bytes, size_t* node_size) {
 
   DCHECK(IsVeryLong() || Available() == SumFreeLists());
   return node;
+}
+
+// ------------------------------------------------
+// FreeListManyFastMoving implementation
+
+FreeSpace FreeListManyFastMoving::Allocate(size_t size_in_bytes,
+                                           size_t* node_size) {
+  DCHECK_GE(kMaxBlockSize, size_in_bytes);
+  FreeSpace node;
+
+  // First, try the fast path.
+  FreeListCategoryType type = SelectFreeListCategoryType(size_in_bytes);
+#define MAX(a, b) a > b ? a : b
+  FreeListCategoryType start_type =
+      MAX(type + start_fast_path_, last_category_);
+#undef MAX
+  for (int i = start_type; i >= type && node.is_null(); i--) {
+    node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                         node_size);
+  }
+
+  if (node.is_null()) {
+    // Try bigger categories
+    for (int i = start_type + 1; i < last_category_; i++) {
+      node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                           node_size);
+    }
+  }
+
+  if (node.is_null()) {
+    // Iterating through the largest category
+    node = SearchForNodeInList(last_category_, size_in_bytes, node_size);
+  }
+
+  start_type = (start_type + 1) % 20;
+
+  if (!node.is_null()) {
+    Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+  }
+
+  DCHECK(IsVeryLong() || Available() == SumFreeLists());
+  return node;
+}
+
+// ------------------------------------------------
+// FreeListManyHalfFast implementation
+
+FreeSpace FreeListManyHalfFast::Allocate(size_t size_in_bytes,
+                                         size_t* node_size) {
+  DCHECK_GE(kMaxBlockSize, size_in_bytes);
+
+  fast_path_ = !fast_path_;
+
+  if (fast_path_) {
+    return FreeListManyFast::Allocate(size_in_bytes, node_size);
+  } else {
+    return FreeListMany::Allocate(size_in_bytes, node_size);
+  }
 }
 
 // ------------------------------------------------
