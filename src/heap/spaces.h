@@ -2022,7 +2022,7 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
 // Uses half less FreeList than FreeListMany. The idea being that iterating
 // through all categories might be a bit expensive time-wisem and reducing the
 // number of categories might reduce the time spent in Allocate.
-class V8_EXPORT_PRIVATE FreeListHalfMany : public FreeListMany {
+class V8_EXPORT_PRIVATE FreeListHalfMany : public FreeList {
  public:
   size_t GuaranteedAllocatable(size_t maximum_freed) override;
 

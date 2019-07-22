@@ -3006,26 +3006,16 @@ void FreeListCategory::Relink() {
 
 FreeList* FreeList::CreateFreeList() {
   switch (FLAG_gc_freelist_strategy) {
-    case 0:
-      return new FreeListLegacy();
-    case 1:
-      return new FreeListFastAlloc();
-    case 2:
-      return new FreeListMany();
-    case 3:
-      return new FreeListManyFast();
-    case 4:
-      return new FreeListManyFastMoving();
-    case 5:
-      return new FreeListManyHalfFast();
-    case 6:
-      return new FreeListMany2x();
-    case 7:
-      return new FreeListLegacySlowPath();
-    case 8:
-      return new FreeListHalfMany();
-    default:
-      return new FreeListLegacy();
+    case 0:  return new FreeListLegacy();
+    case 1:  return new FreeListFastAlloc();
+    case 2:  return new FreeListMany();
+    case 3:  return new FreeListManyFast();
+    case 4:  return new FreeListManyFastMoving();
+    case 5:  return new FreeListManyHalfFast();
+    case 6:  return new FreeListMany2x();
+    case 7:  return new FreeListLegacySlowPath();
+    case 8:  return new FreeListHalfMany();
+    default: return new FreeListLegacy();
   }
 }
 
@@ -3375,6 +3365,8 @@ FreeListHalfMany::FreeListHalfMany() {
   Reset();
 }
 
+FreeListHalfMany::~FreeListHalfMany() { delete[] categories_; }
+
 size_t FreeListHalfMany::GuaranteedAllocatable(size_t maximum_freed) {
   if (maximum_freed < categories_max[0]) {
     return 0;
@@ -3397,7 +3389,6 @@ Page* FreeListHalfMany::GetPageForSize(size_t size_in_bytes) {
   return page;
 }
 
-FreeListHalfMany::~FreeListHalfMany() { delete[] categories_; }
 
 FreeSpace FreeListHalfMany::Allocate(size_t size_in_bytes, size_t* node_size) {
   DCHECK_GE(kMaxBlockSize, size_in_bytes);
