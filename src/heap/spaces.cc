@@ -1970,7 +1970,7 @@ std::unique_ptr<ObjectIterator> PagedSpace::GetObjectIterator() {
   return std::unique_ptr<ObjectIterator>(new PagedSpaceObjectIterator(this));
 }
 
-bool PagedSpace::RefillLinearAllocationAreaFromFreeList(size_t size_in_bytes) {
+bool PagedSpace::RefillLinearAllocationAreaFromFreeList(size_t size_in_bytes, AllocationOrigin origin) {
   DCHECK(IsAligned(size_in_bytes, kTaggedSize));
   DCHECK_LE(top(), limit());
 #ifdef DEBUG
@@ -1993,7 +1993,7 @@ bool PagedSpace::RefillLinearAllocationAreaFromFreeList(size_t size_in_bytes) {
   }
 
   size_t new_node_size = 0;
-  FreeSpace new_node = free_list_->Allocate(size_in_bytes, &new_node_size);
+  FreeSpace new_node = free_list_->Allocate(size_in_bytes, &new_node_size, origin);
   if (new_node.is_null()) return false;
   DCHECK_GE(new_node_size, size_in_bytes);
 
@@ -3019,6 +3019,10 @@ FreeList* FreeList::CreateFreeList() {
     case 6:  return new FreeListMany2x();
     case 7:  return new FreeListLegacySlowPath();
     case 8:  return new FreeListHalfMany();
+    case 9:  return new FreeListMany2xCached();
+    case 10: return new FreeListLegacyMoreSmalls();
+    case 11: return new FreeListManyVeryFast();
+    case 12: return new FreeListManyOrigin();
     default: return new FreeListLegacy();
   }
 }
@@ -3085,13 +3089,22 @@ FreeListLegacy::FreeListLegacy() {
   last_category_ = kHuge;
   min_block_size_ = kMinBlockSize;
   categories_ = new FreeListCategory*[number_of_categories_]();
+  if (FLAG_gc_invert_freelist_sort) {
+    categories_end_ = new FreeListCategory*[number_of_categories_]();
+  }
 
   Reset();
 }
 
-FreeListLegacy::~FreeListLegacy() { delete[] categories_; }
+FreeListLegacy::~FreeListLegacy() {
+  delete[] categories_;
+  if (FLAG_gc_invert_freelist_sort) {
+    delete[] categories_end_;
+  }
+}
 
-FreeSpace FreeListLegacy::Allocate(size_t size_in_bytes, size_t* node_size) {
+FreeSpace FreeListLegacy::Allocate(size_t size_in_bytes, size_t* node_size, AllocationOrigin origin) {
+  USE(origin);
   DCHECK_GE(kMaxBlockSize, size_in_bytes);
   FreeSpace node;
   // First try the allocation fast path: try to allocate the minimum element
@@ -3138,7 +3151,8 @@ FreeSpace FreeListLegacy::Allocate(size_t size_in_bytes, size_t* node_size) {
 // FreeListLegacySlowPath implementation
 
 FreeSpace FreeListLegacySlowPath::Allocate(size_t size_in_bytes,
-                                           size_t* node_size) {
+                                           size_t* node_size, AllocationOrigin origin) {
+  USE(origin);
   DCHECK_GE(kMaxBlockSize, size_in_bytes);
   FreeSpace node;
   // First try the allocation fast path: try to allocate the minimum element
@@ -3162,6 +3176,77 @@ FreeSpace FreeListLegacySlowPath::Allocate(size_t size_in_bytes,
   DCHECK(IsVeryLong() || Available() == SumFreeLists());
   return node;
 }
+
+
+// ------------------------------------------------
+// FreeListLegacyMoreSmalls implementation
+
+// Cf. the declaration of |categories_max| in |spaces.h| to see how this is
+// computed.
+const size_t FreeListLegacyMoreSmalls::categories_max[kNumberOfCategories] = {
+    24,    32,    40,    48,    56,    64,   72,    80,   88,   96,
+    104,   112,   120,   128,   136,   144,  152,   160,
+    168,   176,   184,   192,   200,   208,  216,   224,
+    232,   240,   248,   2048, 16376, 65528, Page::kPageSize};
+
+FreeListLegacyMoreSmalls::FreeListLegacyMoreSmalls() {
+  // Initializing base (FreeList) fields
+  number_of_categories_ = kNumberOfCategories;
+  last_category_ = kLastCategory;
+  min_block_size_ = kMinBlockSize;
+  categories_ = new FreeListCategory*[number_of_categories_]();
+  if (FLAG_gc_invert_freelist_sort) {
+    categories_end_ = new FreeListCategory*[number_of_categories_]();
+  }
+
+  Reset();
+}
+
+FreeListLegacyMoreSmalls::~FreeListLegacyMoreSmalls() {
+  delete[] categories_;
+  if (FLAG_gc_invert_freelist_sort) {
+    delete[] categories_end_;
+  }
+}
+
+FreeSpace FreeListLegacyMoreSmalls::Allocate(size_t size_in_bytes, size_t* node_size, AllocationOrigin origin) {
+  USE(origin);
+  DCHECK_GE(kMaxBlockSize, size_in_bytes);
+  FreeSpace node;
+  // First try the allocation fast path: try to allocate the minimum element
+  // size of a free list category. This operation is constant time.
+  FreeListCategoryType type =
+      SelectFastAllocationFreeListCategoryType(size_in_bytes);
+  for (int i = type; i < kLastCategory && node.is_null(); i++) {
+    node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                         node_size);
+  }
+
+  if (node.is_null()) {
+    // Next search the huge list for free list nodes. This takes linear time in
+    // the number of huge elements.
+    node = SearchForNodeInList(kLastCategory, size_in_bytes, node_size);
+  }
+
+  if (node.is_null() && type != kLastCategory) {
+    // We didn't find anything in the huge list.
+    FreeListCategoryType smallest_type = SelectFreeListCategoryType(size_in_bytes);
+
+    // Now search the best fitting free list for a node that has at least the
+    // requested size.
+    for (int i = smallest_type; node.is_null() && i < type; i++) {
+      node = TryFindNodeIn(i, size_in_bytes, node_size);
+    }
+  }
+
+  if (!node.is_null()) {
+    Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+  }
+
+  DCHECK(IsVeryLong() || Available() == SumFreeLists());
+  return node;
+}
+
 // ------------------------------------------------
 // FreeListFastAlloc implementation
 
@@ -3171,13 +3256,22 @@ FreeListFastAlloc::FreeListFastAlloc() {
   last_category_ = kHuge;
   min_block_size_ = kMinBlockSize;
   categories_ = new FreeListCategory*[number_of_categories_]();
+  if (FLAG_gc_invert_freelist_sort) {
+    categories_end_ = new FreeListCategory*[number_of_categories_]();
+  }
 
   Reset();
 }
 
-FreeListFastAlloc::~FreeListFastAlloc() { delete[] categories_; }
+FreeListFastAlloc::~FreeListFastAlloc() {
+  delete[] categories_;
+  if (FLAG_gc_invert_freelist_sort) {
+    delete[] categories_end_;
+  }
+}
 
-FreeSpace FreeListFastAlloc::Allocate(size_t size_in_bytes, size_t* node_size) {
+FreeSpace FreeListFastAlloc::Allocate(size_t size_in_bytes, size_t* node_size, AllocationOrigin origin) {
+  USE(origin);
   DCHECK_GE(kMaxBlockSize, size_in_bytes);
   FreeSpace node;
   // Try to allocate the biggest element possible (to make the most of later
@@ -3202,53 +3296,12 @@ FreeSpace FreeListFastAlloc::Allocate(size_t size_in_bytes, size_t* node_size) {
 // Cf. the declaration of |categories_max| in |spaces.h| to see how this is
 // computed.
 const size_t FreeListMany::categories_max[kNumberOfCategories] = {
-    24,
-    32,
-    40,
-    48,
-    56,
-    64,
-    72,
-    80,
-    88,
-    96,
-    104,
-    112,
-    120,
-    128,
-    136,
-    144,
-    152,
-    160,
-    168,
-    176,
-    184,
-    192,
-    200,
-    208,
-    216,
-    224,
-    232,
-    240,
-    248,
-    256,
-    384,
-    512,
-    768,
-    1024,
-    1536,
-    2048,
-    3072,
-    4096,
-    6144,
-    8192,
-    12288,
-    16384,
-    24576,
-    32768,
-    49152,
-    65536,
-    Page::kPageSize};
+    24,    32,    40,    48,    56,    64,   72,    80,   88,   96,
+    104,   112,   120,   128,   136,   144,  152,   160,
+    168,   176,   184,   192,   200,   208,  216,   224,
+    232,   240,   248,   256,   384,   512,  768,   1024,
+    1536,  2048,  3072,  4096,  6144,  8192, 12288,
+    16384, 24576, 32768, 49152, 65536, Page::kPageSize};
 
 FreeListMany::FreeListMany() {
   // Initializing base (FreeList) fields
@@ -3256,6 +3309,9 @@ FreeListMany::FreeListMany() {
   last_category_ = number_of_categories_ - 1;
   min_block_size_ = kMinBlockSize;
   categories_ = new FreeListCategory*[number_of_categories_]();
+  if (FLAG_gc_invert_freelist_sort) {
+    categories_end_ = new FreeListCategory*[number_of_categories_]();
+  }
 
   Reset();
 }
@@ -3282,9 +3338,15 @@ Page* FreeListMany::GetPageForSize(size_t size_in_bytes) {
   return page;
 }
 
-FreeListMany::~FreeListMany() { delete[] categories_; }
+FreeListMany::~FreeListMany() {
+  delete[] categories_;
+  if (FLAG_gc_invert_freelist_sort) {
+    delete[] categories_end_;
+  }
+}
 
-FreeSpace FreeListMany::Allocate(size_t size_in_bytes, size_t* node_size) {
+FreeSpace FreeListMany::Allocate(size_t size_in_bytes, size_t* node_size, AllocationOrigin origin) {
+  USE(origin);
   DCHECK_GE(kMaxBlockSize, size_in_bytes);
   FreeSpace node;
   FreeListCategoryType type = SelectFreeListCategoryType(size_in_bytes);
@@ -3365,11 +3427,19 @@ FreeListHalfMany::FreeListHalfMany() {
   last_category_ = number_of_categories_ - 1;
   min_block_size_ = kMinBlockSize;
   categories_ = new FreeListCategory*[number_of_categories_]();
+  if (FLAG_gc_invert_freelist_sort) {
+    categories_end_ = new FreeListCategory*[number_of_categories_]();
+  }
 
   Reset();
 }
 
-FreeListHalfMany::~FreeListHalfMany() { delete[] categories_; }
+FreeListHalfMany::~FreeListHalfMany() {
+  delete[] categories_;
+  if (FLAG_gc_invert_freelist_sort) {
+    delete[] categories_end_;
+  }
+}
 
 size_t FreeListHalfMany::GuaranteedAllocatable(size_t maximum_freed) {
   if (maximum_freed < categories_max[0]) {
@@ -3394,7 +3464,8 @@ Page* FreeListHalfMany::GetPageForSize(size_t size_in_bytes) {
 }
 
 
-FreeSpace FreeListHalfMany::Allocate(size_t size_in_bytes, size_t* node_size) {
+FreeSpace FreeListHalfMany::Allocate(size_t size_in_bytes, size_t* node_size, AllocationOrigin origin) {
+  USE(origin);
   DCHECK_GE(kMaxBlockSize, size_in_bytes);
   FreeSpace node;
   FreeListCategoryType type = SelectFreeListCategoryType(size_in_bytes);
@@ -3419,7 +3490,8 @@ FreeSpace FreeListHalfMany::Allocate(size_t size_in_bytes, size_t* node_size) {
 // ------------------------------------------------
 // FreeListMany2x implementation
 
-FreeSpace FreeListMany2x::Allocate(size_t size_in_bytes, size_t* node_size) {
+FreeSpace FreeListMany2x::Allocate(size_t size_in_bytes, size_t* node_size, AllocationOrigin origin) {
+  USE(origin);
   DCHECK_GE(kMaxBlockSize, size_in_bytes);
   FreeSpace node;
 
@@ -3429,7 +3501,71 @@ FreeSpace FreeListMany2x::Allocate(size_t size_in_bytes, size_t* node_size) {
   }
 
   if (node.is_null()) {
-    return FreeListMany::Allocate(size_in_bytes, node_size);
+    return FreeListMany::Allocate(size_in_bytes, node_size, origin);
+  }
+
+  if (!node.is_null()) {
+    Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+  }
+
+  DCHECK(IsVeryLong() || Available() == SumFreeLists());
+  return node;
+}
+
+// ------------------------------------------------
+// FreeListMany2xCached implementation
+
+FreeListCategoryType FreeListMany2xCached::category_cache_[47] = { 0 };
+
+void FreeListMany2xCached::Reset() {
+  for (int i = 0; i < number_of_categories_; i++) {
+    category_cache_[i] = 0;
+  }
+  FreeList::Reset();
+}
+
+FreeSpace FreeListMany2xCached::Allocate(size_t size_in_bytes, size_t* node_size, AllocationOrigin origin) {
+  USE(origin);
+  DCHECK_GE(kMaxBlockSize, size_in_bytes);
+  FreeSpace node;
+
+  FreeListCategoryType default_type = SelectFreeListCategoryType(size_in_bytes);
+  FreeListCategoryType cached = category_cache_[default_type];
+
+  if (cached != 0) {
+    node = TryFindNodeIn(cached, size_in_bytes, node_size);
+  }
+
+  if (node.is_null() && size_in_bytes < 256) {
+    FreeListCategoryType type = SelectFreeListCategoryType(size_in_bytes * 2);
+    node = TryFindNodeIn(type, size_in_bytes, node_size);
+    if (! node.is_null()) {
+      category_cache_[default_type] = type;
+    }
+  }
+
+  if (node.is_null()) {
+    FreeListCategoryType type = SelectFreeListCategoryType(size_in_bytes);
+    for (int i = type; i < last_category_ && node.is_null(); i++) {
+      node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                           node_size);
+    }
+    if (! node.is_null()) {
+      category_cache_[default_type] = type;
+    }
+
+    if (node.is_null()) {
+      // Searching each element of the last category.
+      node = SearchForNodeInList(last_category_, size_in_bytes, node_size);
+    }
+    if (!node.is_null()) {
+      category_cache_[default_type] = last_category_;
+    }
+  }
+
+  if (node.is_null()) {
+    // Not found, resetting cache entry
+    category_cache_[default_type] = 0;
   }
 
   if (!node.is_null()) {
@@ -3443,7 +3579,8 @@ FreeSpace FreeListMany2x::Allocate(size_t size_in_bytes, size_t* node_size) {
 // ------------------------------------------------
 // FreeListManyFast implementation
 
-FreeSpace FreeListManyFast::Allocate(size_t size_in_bytes, size_t* node_size) {
+FreeSpace FreeListManyFast::Allocate(size_t size_in_bytes, size_t* node_size, AllocationOrigin origin) {
+  USE(origin);
   DCHECK_GE(kMaxBlockSize, size_in_bytes);
   FreeSpace node;
 
@@ -3483,10 +3620,49 @@ FreeSpace FreeListManyFast::Allocate(size_t size_in_bytes, size_t* node_size) {
 }
 
 // ------------------------------------------------
+// FreeListManyVeryFast implementation
+
+FreeSpace FreeListManyVeryFast::Allocate(size_t size_in_bytes, size_t* node_size, AllocationOrigin origin) {
+  USE(origin);
+  DCHECK_GE(kMaxBlockSize, size_in_bytes);
+  FreeSpace node;
+
+  // First, try the fast path.
+  FreeListCategoryType type = SelectFreeListCategoryType(size_in_bytes);
+  for (int i = last_category_; i >= type && node.is_null(); i--) {
+    node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                         node_size);
+  }
+
+  if (node.is_null()) {
+    // Iterating through the largest category
+    node = SearchForNodeInList(last_category_, size_in_bytes, node_size);
+  }
+
+  if (!node.is_null()) {
+    Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+  }
+
+  DCHECK(IsVeryLong() || Available() == SumFreeLists());
+  return node;
+}
+
+// ------------------------------------------------
+// FreeListManyOrigin implementation
+
+FreeSpace FreeListManyOrigin::Allocate(size_t size_in_bytes, size_t* node_size, AllocationOrigin origin) {
+  if (origin == AllocationOrigin::kGC) {
+    return FreeListMany::Allocate(size_in_bytes, node_size, origin);
+  } else {
+    return FreeListManyVeryFast::Allocate(size_in_bytes, node_size, origin);
+  }
+}
+// ------------------------------------------------
 // FreeListManyFastMoving implementation
 
 FreeSpace FreeListManyFastMoving::Allocate(size_t size_in_bytes,
-                                           size_t* node_size) {
+                                           size_t* node_size, AllocationOrigin origin) {
+  USE(origin);
   DCHECK_GE(kMaxBlockSize, size_in_bytes);
   FreeSpace node;
 
@@ -3528,15 +3704,16 @@ FreeSpace FreeListManyFastMoving::Allocate(size_t size_in_bytes,
 // FreeListManyHalfFast implementation
 
 FreeSpace FreeListManyHalfFast::Allocate(size_t size_in_bytes,
-                                         size_t* node_size) {
+                                         size_t* node_size, AllocationOrigin origin) {
+  USE(origin);
   DCHECK_GE(kMaxBlockSize, size_in_bytes);
 
   fast_path_ = !fast_path_;
 
   if (fast_path_) {
-    return FreeListManyFast::Allocate(size_in_bytes, node_size);
+    return FreeListManyFast::Allocate(size_in_bytes, node_size, origin);
   } else {
-    return FreeListMany::Allocate(size_in_bytes, node_size);
+    return FreeListMany::Allocate(size_in_bytes, node_size, origin);
   }
 }
 
@@ -3548,6 +3725,9 @@ void FreeList::Reset() {
       [](FreeListCategory* category) { category->Reset(); });
   for (int i = kFirstCategory; i < number_of_categories_; i++) {
     categories_[i] = nullptr;
+    if (FLAG_gc_invert_freelist_sort) {
+      categories_end_[i] = nullptr;
+    }
   }
   wasted_bytes_ = 0;
   available_ = 0;
@@ -3584,18 +3764,33 @@ bool FreeList::AddCategory(FreeListCategory* category) {
   FreeListCategoryType type = category->type_;
   DCHECK_LT(type, number_of_categories_);
   FreeListCategory* top = categories_[type];
+  DCHECK_NE(top, category);
 
   if (category->is_empty()) return false;
   DCHECK_NE(top, category);
 
-  // Common double-linked list insertion.
-  if (top != nullptr) {
-    top->set_prev(category);
-  }
-  category->set_next(top);
-  categories_[type] = category;
+  if (FLAG_gc_invert_freelist_sort) {
+    FreeListCategory* end = categories_end_[type];
+    DCHECK_NE(end, category);
 
-  IncreaseAvailableBytes(category->available());
+    // Common double-linked list insertion.
+    if (end != nullptr) {
+      end->set_next(category);
+    }
+    category->set_prev(end);
+    categories_end_[type] = category;
+
+    if (top == nullptr) {
+      categories_[type] = category;
+    }
+  } else {
+    // Common double-linked list insertion.
+    if (top != nullptr) {
+      top->set_prev(category);
+    }
+    category->set_next(top);
+    categories_[type] = category;
+  }
   return true;
 }
 
@@ -3608,7 +3803,13 @@ void FreeList::RemoveCategory(FreeListCategory* category) {
     DecreaseAvailableBytes(category->available());
   }
 
-  // Common double-linked list removal.
+  if (FLAG_gc_invert_freelist_sort) {
+    FreeListCategory* end = categories_end_[type];
+    if (end == category) {
+      categories_end_[type] = category->prev();
+    }
+  }
+
   if (top == category) {
     categories_[type] = category->next();
   }
@@ -3701,7 +3902,7 @@ size_t PagedSpace::SizeOfObjects() {
   return Size() - (limit() - top());
 }
 
-bool PagedSpace::SweepAndRetryAllocation(int size_in_bytes) {
+bool PagedSpace::SweepAndRetryAllocation(int size_in_bytes, AllocationOrigin origin) {
   MarkCompactCollector* collector = heap()->mark_compact_collector();
   if (collector->sweeping_in_progress()) {
     // Wait for the sweeper threads here and complete the sweeping phase.
@@ -3709,38 +3910,38 @@ bool PagedSpace::SweepAndRetryAllocation(int size_in_bytes) {
 
     // After waiting for the sweeper threads, there may be new free-list
     // entries.
-    return RefillLinearAllocationAreaFromFreeList(size_in_bytes);
+    return RefillLinearAllocationAreaFromFreeList(size_in_bytes, origin);
   }
   return false;
 }
 
-bool CompactionSpace::SweepAndRetryAllocation(int size_in_bytes) {
+bool CompactionSpace::SweepAndRetryAllocation(int size_in_bytes, AllocationOrigin origin) {
   MarkCompactCollector* collector = heap()->mark_compact_collector();
   if (FLAG_concurrent_sweeping && collector->sweeping_in_progress()) {
     collector->sweeper()->ParallelSweepSpace(identity(), 0);
     RefillFreeList();
-    return RefillLinearAllocationAreaFromFreeList(size_in_bytes);
+    return RefillLinearAllocationAreaFromFreeList(size_in_bytes, origin);
   }
   return false;
 }
 
-bool PagedSpace::SlowRefillLinearAllocationArea(int size_in_bytes) {
+bool PagedSpace::SlowRefillLinearAllocationArea(int size_in_bytes, AllocationOrigin origin) {
   VMState<GC> state(heap()->isolate());
   RuntimeCallTimerScope runtime_timer(
       heap()->isolate(), RuntimeCallCounterId::kGC_Custom_SlowAllocateRaw);
-  return RawSlowRefillLinearAllocationArea(size_in_bytes);
+  return RawSlowRefillLinearAllocationArea(size_in_bytes, origin);
 }
 
-bool CompactionSpace::SlowRefillLinearAllocationArea(int size_in_bytes) {
-  return RawSlowRefillLinearAllocationArea(size_in_bytes);
+bool CompactionSpace::SlowRefillLinearAllocationArea(int size_in_bytes, AllocationOrigin origin) {
+  return RawSlowRefillLinearAllocationArea(size_in_bytes, origin);
 }
 
-bool PagedSpace::RawSlowRefillLinearAllocationArea(int size_in_bytes) {
+bool PagedSpace::RawSlowRefillLinearAllocationArea(int size_in_bytes, AllocationOrigin origin) {
   // Allocation in this space has failed.
   DCHECK_GE(size_in_bytes, 0);
   const int kMaxPagesToSweep = 1;
 
-  if (RefillLinearAllocationAreaFromFreeList(size_in_bytes)) return true;
+  if (RefillLinearAllocationAreaFromFreeList(size_in_bytes, origin)) return true;
 
   MarkCompactCollector* collector = heap()->mark_compact_collector();
   // Sweeping is still in progress.
@@ -3756,7 +3957,7 @@ bool PagedSpace::RawSlowRefillLinearAllocationArea(int size_in_bytes) {
 
     // Retry the free list allocation.
     if (RefillLinearAllocationAreaFromFreeList(
-            static_cast<size_t>(size_in_bytes)))
+            static_cast<size_t>(size_in_bytes), origin))
       return true;
 
     // If sweeping is still in progress try to sweep pages.
@@ -3765,7 +3966,7 @@ bool PagedSpace::RawSlowRefillLinearAllocationArea(int size_in_bytes) {
     RefillFreeList();
     if (max_freed >= size_in_bytes) {
       if (RefillLinearAllocationAreaFromFreeList(
-              static_cast<size_t>(size_in_bytes)))
+              static_cast<size_t>(size_in_bytes), origin))
         return true;
     }
   }
@@ -3778,7 +3979,7 @@ bool PagedSpace::RawSlowRefillLinearAllocationArea(int size_in_bytes) {
     if (page != nullptr) {
       AddPage(page);
       if (RefillLinearAllocationAreaFromFreeList(
-              static_cast<size_t>(size_in_bytes)))
+              static_cast<size_t>(size_in_bytes), origin))
         return true;
     }
   }
@@ -3787,13 +3988,13 @@ bool PagedSpace::RawSlowRefillLinearAllocationArea(int size_in_bytes) {
     DCHECK((CountTotalPages() > 1) ||
            (static_cast<size_t>(size_in_bytes) <= free_list_->Available()));
     return RefillLinearAllocationAreaFromFreeList(
-        static_cast<size_t>(size_in_bytes));
+        static_cast<size_t>(size_in_bytes), origin);
   }
 
   // If sweeper threads are active, wait for them at that point and steal
   // elements form their free-lists. Allocation may still fail their which
   // would indicate that there is not enough memory for the given allocation.
-  return SweepAndRetryAllocation(size_in_bytes);
+  return SweepAndRetryAllocation(size_in_bytes, origin);
 }
 
 // -----------------------------------------------------------------------------

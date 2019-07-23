@@ -226,6 +226,7 @@ class FreeListCategory {
   friend class FreeList;
   friend class PagedSpace;
   friend class MapSpace;
+  friend class Heap;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(FreeListCategory);
 };
@@ -261,12 +262,12 @@ class FreeList {
   // size_in_bytes. This method returns null if the allocation request cannot be
   // handled by the free list.
   virtual V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                                   size_t* node_size) = 0;
+                                                   size_t* node_size, AllocationOrigin origin) = 0;
 
   // Returns a page containing an entry for a given type, or nullptr otherwise.
   V8_EXPORT_PRIVATE virtual Page* GetPageForSize(size_t size_in_bytes) = 0;
 
-  void Reset();
+  virtual void Reset();
 
   // Return the number of bytes available on the free list.
   size_t Available() {
@@ -371,6 +372,7 @@ class FreeList {
 
   std::atomic<size_t> wasted_bytes_{0};
   FreeListCategory** categories_ = nullptr;
+  FreeListCategory** categories_end_ = nullptr;
 
   // |available_|: The number of bytes in this freelist.
   size_t available_ = 0;
@@ -380,6 +382,7 @@ class FreeList {
   friend class MemoryChunk;
   friend class ReadOnlyPage;
   friend class MapSpace;
+  friend class Heap;
 };
 
 // FreeList used for spaces that don't have freelists
@@ -393,7 +396,7 @@ class NoFreeList final : public FreeList {
     FATAL("NoFreeList can't be used as a standard FreeList.");
   }
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                           size_t* node_size) final {
+                                           size_t* node_size, AllocationOrigin origin) final {
     FATAL("NoFreeList can't be used as a standard FreeList.");
   }
   Page* GetPageForSize(size_t size_in_bytes) final {
@@ -1837,7 +1840,7 @@ class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
   ~FreeListLegacy();
 
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                           size_t* node_size) override;
+                                           size_t* node_size, AllocationOrigin origin) override;
 
  protected:
   enum { kTiniest, kTiny, kSmall, kMedium, kLarge, kHuge };
@@ -1848,7 +1851,7 @@ class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
   // padding and alignment of data and code pages into account.
   static const size_t kMaxBlockSize = Page::kPageSize;
 
-  // 24
+  // -                                                          24
   static const size_t kTiniestListMax = 0xa * kTaggedSize;   // 80
   static const size_t kTinyListMax = 0x1f * kTaggedSize;     // 248
   static const size_t kSmallListMax = 0xff * kTaggedSize;    // 2048
@@ -1893,10 +1896,78 @@ class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
   friend class heap::HeapTester;
 };
 
+
+class V8_EXPORT_PRIVATE FreeListLegacyMoreSmalls : public FreeList {
+   public:
+  size_t GuaranteedAllocatable(size_t maximum_freed) override {
+    if (maximum_freed <= categories_max[0]) {
+      // Since we are not iterating over all list entries, we cannot guarantee
+      // that we can find the maximum freed block in that free list.
+      return 0;
+    }
+    for (int i = 1; i < kLastCategory; i++) {
+      if (maximum_freed <= categories_max[i]) {
+        return categories_max[i-1];
+      }
+    }
+    return maximum_freed;
+  }
+
+  Page* GetPageForSize(size_t size_in_bytes) override {
+    const int minimum_category =
+        static_cast<int>(SelectFreeListCategoryType(size_in_bytes));
+    Page* page = GetPageForCategoryType(kLastCategory);
+    for (int i = kLastCategory-1; !page && i >= minimum_category; i--) {
+      page = GetPageForCategoryType(i);
+    }
+    return page;
+  }
+
+  FreeListLegacyMoreSmalls();
+  ~FreeListLegacyMoreSmalls();
+
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size, AllocationOrigin origin) override;
+
+ protected:
+  static const int kNumberOfCategories = 33;
+  static const int kLastCategory = kNumberOfCategories-1;
+  static const size_t categories_max[kNumberOfCategories];
+  static const size_t kSmallAllocationMaxIndex = 28;
+
+  static const size_t kMinBlockSize = 3 * kTaggedSize;
+
+  // This is a conservative upper bound. The actual maximum block size takes
+  // padding and alignment of data and code pages into account.
+  static const size_t kMaxBlockSize = Page::kPageSize;
+
+  FreeListCategoryType SelectFreeListCategoryType(
+      size_t size_in_bytes) override {
+    for (int i = 0; i < kNumberOfCategories; i++) {
+      if (size_in_bytes <= categories_max[i]) {
+        return i;
+      }
+    }
+    return kLastCategory;
+  }
+
+  // Returns the category to be used to allocate |size_in_bytes| in the fast
+  // path. The tiny categories are not used for fast allocation.
+  FreeListCategoryType SelectFastAllocationFreeListCategoryType(
+      size_t size_in_bytes) {
+    for (int i = kSmallAllocationMaxIndex; i < kLastCategory; i++) {
+      if (size_in_bytes <= categories_max[i]) {
+        return i+1;
+      }
+    }
+    return kLastCategory;
+  }
+};
+
 // Like FreeListLegacy, but without fast path
 class V8_EXPORT_PRIVATE FreeListLegacySlowPath : public FreeListLegacy {
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                           size_t* node_size) override;
+                                           size_t* node_size, AllocationOrigin origin) override;
 };
 
 // Inspired by FreeListLegacy.
@@ -1936,7 +2007,7 @@ class V8_EXPORT_PRIVATE FreeListFastAlloc : public FreeList {
   ~FreeListFastAlloc();
 
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                           size_t* node_size) override;
+                                           size_t* node_size, AllocationOrigin origin) override;
 
  private:
   enum { kMedium, kLarge, kHuge };
@@ -1969,7 +2040,8 @@ class V8_EXPORT_PRIVATE FreeListFastAlloc : public FreeList {
   }
 };
 
-// Use 49 Freelists: on per size between 24 and 256, and then a few ones for
+
+// Use 47 Freelists: on per size between 24 and 256, and then a few ones for
 // larger sizes. See the variable |categories_max| for the size of each
 // Freelist.  Allocation is done using a best-fit strategy (considering only the
 // first element of each category though).
@@ -1985,7 +2057,7 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
   ~FreeListMany();
 
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                           size_t* node_size) override;
+                                           size_t* node_size, AllocationOrigin origin) override;
 
  protected:
   static const size_t kMinBlockSize = 3 * kTaggedSize;
@@ -2008,9 +2080,14 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
   static const size_t categories_max[kNumberOfCategories];
 
   // Return the smallest category that could hold |size_in_bytes| bytes.
+
   FreeListCategoryType SelectFreeListCategoryType(
       size_t size_in_bytes) override {
-    for (int cat = kFirstCategory; cat < last_category_; cat++) {
+    if (size_in_bytes <= 256) {
+      if (size_in_bytes <= 24) return 0;
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 3) - 3;
+    }
+    for (int cat = (256 >> 3) - 3; cat < last_category_; cat++) {
       if (size_in_bytes <= categories_max[cat]) {
         return cat;
       }
@@ -2032,7 +2109,7 @@ class V8_EXPORT_PRIVATE FreeListHalfMany : public FreeList {
   ~FreeListHalfMany();
 
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                           size_t* node_size) override;
+                                           size_t* node_size, AllocationOrigin origin) override;
 
  protected:
   static const size_t kMinBlockSize = 3 * kTaggedSize;
@@ -2095,7 +2172,22 @@ class V8_EXPORT_PRIVATE FreeListMap : public FreeList {
 class V8_EXPORT_PRIVATE FreeListMany2x : public FreeListMany {
  public:
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                           size_t* node_size) override;
+                                           size_t* node_size, AllocationOrigin origin) override;
+};
+
+// Like FreeListMany2x, but uses a cache to remember the last category used for
+// a given category. For example, if SelectFreeListCategoryType returns "2",
+// it's possible that this category was empty and other categories were
+// searched, and finally the 34th wasn't empty. In that case, category_cache_[2]
+// will be set to 34.
+class V8_EXPORT_PRIVATE FreeListMany2xCached : public FreeListMany2x {
+public:
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size, AllocationOrigin origin) override;
+
+  void Reset() override;
+private:
+  static FreeListCategoryType category_cache_[47];
 };
 
 // Uses the same FreeLists as FreeListMany, but uses a fast path for allocation,
@@ -2107,7 +2199,7 @@ class V8_EXPORT_PRIVATE FreeListMany2x : public FreeListMany {
 class V8_EXPORT_PRIVATE FreeListManyFast : public FreeListMany {
  public:
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                           size_t* node_size) override;
+                                           size_t* node_size, AllocationOrigin origin) override;
 
  protected:
   // Objects in the 36th category are at least 2056 bytes
@@ -2154,6 +2246,15 @@ class V8_EXPORT_PRIVATE FreeListManyFast : public FreeListMany {
   }
 };
 
+// Uses the same FreeLists as FreeListMany, but uses a fast path for allocation,
+// in order to still benefit from bump-pointer style allocation. Concretely, the
+// bigger categories are considered first when allocating.
+class V8_EXPORT_PRIVATE FreeListManyVeryFast : public FreeListMany {
+ public:
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size, AllocationOrigin origin) override;
+};
+
 // Kind of a mix between FreeListMany and FreeListManyFast. Here, the fast path
 // starting index changes over time (based on variable |start_fast_path_|). The
 // goal is to use more the low categories, in order to keep memory low, while
@@ -2161,7 +2262,7 @@ class V8_EXPORT_PRIVATE FreeListManyFast : public FreeListMany {
 class V8_EXPORT_PRIVATE FreeListManyFastMoving : public FreeListManyFast {
  public:
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                           size_t* node_size) override;
+                                           size_t* node_size, AllocationOrigin origin) override;
 
  private:
   std::atomic<int> start_fast_path_{0};
@@ -2171,13 +2272,20 @@ class V8_EXPORT_PRIVATE FreeListManyFastMoving : public FreeListManyFast {
 class V8_EXPORT_PRIVATE FreeListManyHalfFast : public FreeListManyFast {
  public:
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                           size_t* node_size) override;
+                                           size_t* node_size, AllocationOrigin origin) override;
 
  private:
   // Note: does that really need to be protected? It doesn't matter if a few
   // allocations use the fast (resp. slow) path instead of the slow (resp fast)
   // one...
   std::atomic<bool> fast_path_{true};
+};
+
+// Uses FreeListMany if in the GC; FreeListManyVeryFast otherwise
+class V8_EXPORT_PRIVATE FreeListManyOrigin : public FreeListManyVeryFast {
+ public:
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size, AllocationOrigin origin) override;
 };
 
 // LocalAllocationBuffer represents a linear allocation area that is created
@@ -2552,7 +2660,7 @@ class V8_EXPORT_PRIVATE PagedSpace
   // Sets up a linear allocation area that fits the given number of bytes.
   // Returns false if there is not enough space and the caller has to retry
   // after collecting garbage.
-  inline bool EnsureLinearAllocationArea(int size_in_bytes);
+  inline bool EnsureLinearAllocationArea(int size_in_bytes, AllocationOrigin origin);
   // Allocates an object from the linear allocation area. Assumes that the
   // linear allocation area is large enought to fit the object.
   inline HeapObject AllocateLinearly(int size_in_bytes);
@@ -2564,24 +2672,24 @@ class V8_EXPORT_PRIVATE PagedSpace
                                                AllocationAlignment alignment);
 
   V8_WARN_UNUSED_RESULT bool RefillLinearAllocationAreaFromFreeList(
-      size_t size_in_bytes);
+      size_t size_in_bytes, AllocationOrigin origin);
 
   // If sweeping is still in progress try to sweep unswept pages. If that is
   // not successful, wait for the sweeper threads and retry free-list
   // allocation. Returns false if there is not enough space and the caller
   // has to retry after collecting garbage.
-  V8_WARN_UNUSED_RESULT virtual bool SweepAndRetryAllocation(int size_in_bytes);
+  V8_WARN_UNUSED_RESULT virtual bool SweepAndRetryAllocation(int size_in_bytes, AllocationOrigin origin);
 
   // Slow path of AllocateRaw. This function is space-dependent. Returns false
   // if there is not enough space and the caller has to retry after
   // collecting garbage.
   V8_WARN_UNUSED_RESULT virtual bool SlowRefillLinearAllocationArea(
-      int size_in_bytes);
+      int size_in_bytes, AllocationOrigin origin);
 
   // Implementation of SlowAllocateRaw. Returns false if there is not enough
   // space and the caller has to retry after collecting garbage.
   V8_WARN_UNUSED_RESULT bool RawSlowRefillLinearAllocationArea(
-      int size_in_bytes);
+      int size_in_bytes, AllocationOrigin origin);
 
   Executability executable_;
 
@@ -3070,10 +3178,10 @@ class V8_EXPORT_PRIVATE CompactionSpace : public PagedSpace {
   bool snapshotable() override { return false; }
 
   V8_WARN_UNUSED_RESULT bool SweepAndRetryAllocation(
-      int size_in_bytes) override;
+      int size_in_bytes, AllocationOrigin origin) override;
 
   V8_WARN_UNUSED_RESULT bool SlowRefillLinearAllocationArea(
-      int size_in_bytes) override;
+      int size_in_bytes, AllocationOrigin origin) override;
 };
 
 // A collection of |CompactionSpace|s used by a single compaction task.

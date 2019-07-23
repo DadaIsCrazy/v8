@@ -556,6 +556,12 @@ void Heap::PrintFreeListsStats() {
     pageCnt++;
   }
 
+  // FreeListCategory* c = old_space()->free_list()->categories_[0];
+  // while (c != nullptr) {
+  //   printf("@@@@@ %5.3f @@@@@\n", (double)c->page()->allocated_bytes() / 1000);
+  //   c = c->next();
+  // }
+
   // Print statistics about old_space (pages, free/wasted/used memory...).
   PrintIsolate(
       isolate_,
