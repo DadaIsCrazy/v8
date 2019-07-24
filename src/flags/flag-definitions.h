@@ -949,6 +949,8 @@ DEFINE_BOOL(gc_experiment_background_schedule, false,
             "new background GC schedule heuristics")
 DEFINE_BOOL(gc_experiment_less_compaction, false,
             "less compaction in non-memory reducing mode")
+DEFINE_BOOL(gc_experiment_link_ecs, true,
+            "Link evacuation candidates")
 
 DEFINE_BOOL(disable_abortjs, false, "disables AbortJS runtime function")
 

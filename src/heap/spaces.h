@@ -260,8 +260,11 @@ class FreeList {
   // bytes. Returns the actual node size in node_size which can be bigger than
   // size_in_bytes. This method returns null if the allocation request cannot be
   // handled by the free list.
-  virtual V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                                   size_t* node_size) = 0;
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size);
+
+  virtual V8_WARN_UNUSED_RESULT FreeSpace Allocate_(size_t size_in_bytes,
+                                                    size_t* node_size) = 0;
 
   // Returns a page containing an entry for a given type, or nullptr otherwise.
   V8_EXPORT_PRIVATE virtual Page* GetPageForSize(size_t size_in_bytes) = 0;
@@ -392,7 +395,7 @@ class NoFreeList final : public FreeList {
   size_t Free(Address start, size_t size_in_bytes, FreeMode mode) final {
     FATAL("NoFreeList can't be used as a standard FreeList.");
   }
-  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate_(size_t size_in_bytes,
                                            size_t* node_size) final {
     FATAL("NoFreeList can't be used as a standard FreeList.");
   }
@@ -518,6 +521,11 @@ class V8_EXPORT_PRIVATE Space : public Malloced {
 
   FreeList* free_list() { return free_list_.get(); }
 
+  size_t free_bytes_threshold() { return free_bytes_threshold_; }
+
+  void RemoveEvacCandidate(MemoryChunk* page);
+  void AddEvacCandidate(MemoryChunk* page);
+
 #ifdef DEBUG
   virtual void Print() = 0;
 #endif
@@ -547,6 +555,16 @@ class V8_EXPORT_PRIVATE Space : public Malloced {
   size_t max_committed_;
 
   std::unique_ptr<FreeList> free_list_;
+
+  size_t free_bytes_threshold_ = 0;
+  std::mutex evac_candidates_mutex;
+
+  MemoryChunk* potential_ecs() { return potential_ecs_; }
+  MemoryChunk* set_potential_ecs(MemoryChunk* ec) { return potential_ecs_ = ec; }
+  MemoryChunk* potential_ecs_ = nullptr;
+
+  friend class Page;
+  friend class MarkCompactCollector;
 
   DISALLOW_COPY_AND_ASSIGN(Space);
 };
@@ -644,7 +662,10 @@ class MemoryChunk : public BasicMemoryChunk {
       + kSizetSize              // size_t allocated_bytes_
       + kSizetSize              // size_t wasted_memory_
       + kSystemPointerSize * 2  // base::ListNode
-      + kSystemPointerSize      // FreeListCategory** categories__
+      + kSystemPointerSize      // FreeListCategory** categories_
+      + kSystemPointerSize      // uintptr_t ec_linked_
+      + kSystemPointerSize      // MemoryChunk* ec_prev_
+      + kSystemPointerSize      // MemoryChunk* ec_next_
       + kSystemPointerSize      // LocalArrayBufferTracker* local_tracker_
       + kIntptrSize  // std::atomic<intptr_t> young_generation_live_byte_count_
       + kSystemPointerSize   // Bitmap* young_generation_bitmap_
@@ -968,7 +989,17 @@ class MemoryChunk : public BasicMemoryChunk {
 
   base::ListNode<MemoryChunk> list_node_;
 
+  // The freelists of this MemoryChunk
   FreeListCategory** categories_;
+
+  // Previous and next evacuation candidates
+  MemoryChunk* ec_prev() { return ec_prev_; }
+  MemoryChunk* set_ec_prev(MemoryChunk* ec) { return ec_prev_ = ec; }
+  MemoryChunk* ec_next() { return ec_next_; }
+  MemoryChunk* set_ec_next(MemoryChunk* ec) { return ec_next_ = ec; }
+  uintptr_t ec_linked_;
+  MemoryChunk* ec_prev_;
+  MemoryChunk* ec_next_;
 
   LocalArrayBufferTracker* local_tracker_;
 
@@ -988,6 +1019,8 @@ class MemoryChunk : public BasicMemoryChunk {
   friend class MinorMarkingState;
   friend class MinorNonAtomicMarkingState;
   friend class PagedSpace;
+  friend class Space;
+  friend class MarkCompactCollector;
 };
 
 STATIC_ASSERT(sizeof(std::atomic<intptr_t>) == kSystemPointerSize);
@@ -1085,6 +1118,24 @@ class Page : public MemoryChunk {
 
   FreeListCategory* free_list_category(FreeListCategoryType type) {
     return categories_[type];
+  }
+
+  void UpdateEvacuationLinks() {
+    if (!FLAG_gc_experiment_link_ecs) return;
+    if (IsFlagSet(EVACUATION_CANDIDATE) || NeverEvacuate()) return;
+    owner()->evac_candidates_mutex.lock();
+    if (ec_linked_ != 0) {
+      if (allocated_bytes_ < owner()->free_bytes_threshold()) {
+        owner()->RemoveEvacCandidate(this);
+        ec_linked_ = 0;
+      }
+    } else if (ec_linked_ == 0) {
+      if (allocated_bytes_ >= owner()->free_bytes_threshold()) {
+        owner()->AddEvacCandidate(this);
+        ec_linked_ = 1;
+      }
+    }
+    owner()->evac_candidates_mutex.unlock();
   }
 
   size_t wasted_memory() { return wasted_memory_; }
@@ -1836,7 +1887,7 @@ class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
   FreeListLegacy();
   ~FreeListLegacy();
 
-  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate_(size_t size_in_bytes,
                                            size_t* node_size) override;
 
  private:
@@ -1928,7 +1979,7 @@ class V8_EXPORT_PRIVATE FreeListFastAlloc : public FreeList {
   FreeListFastAlloc();
   ~FreeListFastAlloc();
 
-  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate_(size_t size_in_bytes,
                                            size_t* node_size) override;
 
  private:
@@ -1977,7 +2028,7 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
   FreeListMany();
   ~FreeListMany();
 
-  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate_(size_t size_in_bytes,
                                            size_t* node_size) override;
 
  private:

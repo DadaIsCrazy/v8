@@ -662,6 +662,32 @@ void MarkCompactCollector::CollectEvacuationCandidates(PagedSpace* space) {
     ComputeEvacuationHeuristics(area_size, &target_fragmentation_percent,
                                 &max_evacuated_bytes);
     free_bytes_threshold = target_fragmentation_percent * (area_size / 100);
+    if (FLAG_gc_experiment_link_ecs) {
+      space->free_bytes_threshold_ = free_bytes_threshold;
+    }
+  }
+
+  if (in_standard_path && FLAG_gc_experiment_link_ecs) {
+  Page* owner_of_linear_allocation_area =
+      space->top() == space->limit()
+          ? nullptr
+          : Page::FromAllocationAreaAddress(space->top());
+    size_t total_live_bytes = 0;
+    space->evac_candidates_mutex.lock();
+    MemoryChunk* mc = space->potential_ecs_;
+    while (mc != nullptr && total_live_bytes < max_evacuated_bytes) {
+      if (mc->NeverEvacuate() || (mc == owner_of_linear_allocation_area) ||
+          !mc->CanAllocate()) {
+        mc = mc->ec_next();
+        continue;
+      }
+      total_live_bytes += static_cast<Page*>(mc)->allocated_bytes();
+      MemoryChunk* next = mc->ec_next();
+      AddEvacuationCandidate(static_cast<Page*>(mc));
+      mc = next;
+    }
+    space->evac_candidates_mutex.unlock();
+    return;
   }
 
   // Pairs of (live_bytes_in_page, page).

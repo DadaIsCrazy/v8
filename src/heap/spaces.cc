@@ -722,6 +722,10 @@ MemoryChunk* MemoryChunk::Initialize(Heap* heap, Address base, size_t size,
 
   chunk->categories_ = nullptr;
 
+  chunk->ec_linked_ = 0;
+  chunk->ec_prev_ = nullptr;
+  chunk->ec_next_ = nullptr;
+
   heap->incremental_marking()->non_atomic_marking_state()->SetLiveBytes(chunk,
                                                                         0);
   if (owner->identity() == RO_SPACE) {
@@ -755,6 +759,29 @@ MemoryChunk* MemoryChunk::Initialize(Heap* heap, Address base, size_t size,
   }
 
   return chunk;
+}
+
+void Space::RemoveEvacCandidate(MemoryChunk* page) {
+  if (page == potential_ecs()) {
+    set_potential_ecs(page->ec_next());
+  }
+  if (page->ec_next() != nullptr) {
+    page->ec_next()->set_ec_prev(page->ec_prev());
+  }
+  if (page->ec_prev() != nullptr) {
+    page->ec_prev()->set_ec_next(page->ec_next());
+  }
+  page->set_ec_next(nullptr);
+  page->set_ec_prev(nullptr);
+}
+
+void Space::AddEvacCandidate(MemoryChunk* page) {
+  if (potential_ecs() != nullptr) {
+    potential_ecs()->set_ec_prev(page);
+  }
+  page->set_ec_prev(nullptr);
+  page->set_ec_next(potential_ecs());
+  set_potential_ecs(page);
 }
 
 Page* PagedSpace::InitializePage(MemoryChunk* chunk) {
@@ -1580,6 +1607,8 @@ PagedSpace::PagedSpace(Heap* heap, AllocationSpace space,
                        Executability executable, FreeList* free_list)
     : SpaceWithLinearArea(heap, space, free_list), executable_(executable) {
   area_size_ = MemoryChunkLayout::AllocatableMemoryInMemoryChunk(space);
+  // TODO: remove that '70'.
+  free_bytes_threshold_ = 70 * (area_size_ / 100);
   accounting_stats_.Clear();
 }
 
@@ -3064,7 +3093,18 @@ size_t FreeList::Free(Address start, size_t size_in_bytes, FreeMode mode) {
   page->free_list_category(type)->Free(start, size_in_bytes, mode);
   DCHECK_EQ(page->AvailableInFreeList(),
             page->AvailableInFreeListFromAllocatedBytes());
+
+  page->UpdateEvacuationLinks();
   return 0;
+}
+
+FreeSpace FreeList::Allocate(size_t size_in_bytes, size_t* node_size) {
+  FreeSpace node = Allocate_(size_in_bytes, node_size);
+
+  if (! node.is_null()) {
+    Page::FromHeapObject(node)->UpdateEvacuationLinks();
+  }
+  return node;
 }
 
 // ------------------------------------------------
@@ -3082,7 +3122,7 @@ FreeListLegacy::FreeListLegacy() {
 
 FreeListLegacy::~FreeListLegacy() { delete[] categories_; }
 
-FreeSpace FreeListLegacy::Allocate(size_t size_in_bytes, size_t* node_size) {
+FreeSpace FreeListLegacy::Allocate_(size_t size_in_bytes, size_t* node_size) {
   DCHECK_GE(kMaxBlockSize, size_in_bytes);
   FreeSpace node;
   // First try the allocation fast path: try to allocate the minimum element
@@ -3140,7 +3180,7 @@ FreeListFastAlloc::FreeListFastAlloc() {
 
 FreeListFastAlloc::~FreeListFastAlloc() { delete[] categories_; }
 
-FreeSpace FreeListFastAlloc::Allocate(size_t size_in_bytes, size_t* node_size) {
+FreeSpace FreeListFastAlloc::Allocate_(size_t size_in_bytes, size_t* node_size) {
   DCHECK_GE(kMaxBlockSize, size_in_bytes);
   FreeSpace node;
   // Try to allocate the biggest element possible (to make the most of later
@@ -3207,7 +3247,7 @@ Page* FreeListMany::GetPageForSize(size_t size_in_bytes) {
 
 FreeListMany::~FreeListMany() { delete[] categories_; }
 
-FreeSpace FreeListMany::Allocate(size_t size_in_bytes, size_t* node_size) {
+FreeSpace FreeListMany::Allocate_(size_t size_in_bytes, size_t* node_size) {
   DCHECK_GE(kMaxBlockSize, size_in_bytes);
   FreeSpace node;
   FreeListCategoryType type = SelectFreeListCategoryType(size_in_bytes);
@@ -3293,6 +3333,7 @@ size_t FreeList::EvictFreeListItems(Page* page) {
     RemoveCategory(category);
     category->Reset();
   });
+  page->owner()->RemoveEvacCandidate(page);
   return sum;
 }
 
