@@ -3245,7 +3245,7 @@ FreeSpace FreeListMap::Allocate(size_t size_in_bytes, size_t* node_size) {
     Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
   }
 
-  DCHECK(IsVeryLong() || Available() == SumFreeLists());
+  DCHECK_IMPLIES(node.is_null(), IsEmpty());
   return node;
 }
 
