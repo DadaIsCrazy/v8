@@ -2972,7 +2972,7 @@ void FreeListCategory::Free(Address start, size_t size_in_bytes,
   set_top(free_space);
   available_ += size_in_bytes;
   length_++;
-  if ((mode == kLinkCategory) && (prev() == nullptr) && (next() == nullptr)) {
+  if ((mode == kLinkCategory) && !is_linked()) {
     owner()->AddCategory(this);
   }
 }
@@ -3072,11 +3072,15 @@ FreeListLegacy::FreeListLegacy() {
   last_category_ = kHuge;
   min_block_size_ = kMinBlockSize;
   categories_ = new FreeListCategory*[number_of_categories_]();
+  categories_end_ = new FreeListCategory*[number_of_categories_]();
 
   Reset();
 }
 
-FreeListLegacy::~FreeListLegacy() { delete[] categories_; }
+FreeListLegacy::~FreeListLegacy() {
+  delete[] categories_;
+  delete[] categories_end_;
+}
 
 FreeSpace FreeListLegacy::Allocate(size_t size_in_bytes, size_t* node_size) {
   DCHECK_GE(kMaxBlockSize, size_in_bytes);
@@ -3233,6 +3237,7 @@ void FreeList::Reset() {
       [](FreeListCategory* category) { category->Reset(); });
   for (int i = kFirstCategory; i < number_of_categories_; i++) {
     categories_[i] = nullptr;
+    categories_end_[i] = nullptr;
   }
   wasted_bytes_ = 0;
 }
@@ -3268,16 +3273,22 @@ bool FreeList::AddCategory(FreeListCategory* category) {
   FreeListCategoryType type = category->type_;
   DCHECK_LT(type, number_of_categories_);
   FreeListCategory* top = categories_[type];
+  FreeListCategory* end = categories_end_[type];
 
   if (category->is_empty()) return false;
-  if (top == category) return false;
+  DCHECK_NE(top, category);
+  DCHECK_NE(end, category);
 
   // Common double-linked list insertion.
-  if (top != nullptr) {
-    top->set_prev(category);
+  if (end != nullptr) {
+    end->set_next(category);
   }
-  category->set_next(top);
-  categories_[type] = category;
+  category->set_prev(end);
+  categories_end_[type] = category;
+
+  if (top == nullptr) {
+    categories_[type] = category;
+  }
   return true;
 }
 
@@ -3285,10 +3296,14 @@ void FreeList::RemoveCategory(FreeListCategory* category) {
   FreeListCategoryType type = category->type_;
   DCHECK_LT(type, number_of_categories_);
   FreeListCategory* top = categories_[type];
+  FreeListCategory* end = categories_end_[type];
 
   // Common double-linked list removal.
   if (top == category) {
     categories_[type] = category->next();
+  }
+  if (end == category) {
+    categories_end_[type] = category->prev();
   }
   if (category->prev() != nullptr) {
     category->prev()->set_next(category->next());

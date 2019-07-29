@@ -365,6 +365,7 @@ class FreeList {
 
   std::atomic<size_t> wasted_bytes_{0};
   FreeListCategory** categories_ = nullptr;
+  FreeListCategory** categories_end_ = nullptr;
 
   friend class FreeListCategory;
   friend class Page;
