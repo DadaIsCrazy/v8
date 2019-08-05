@@ -3520,9 +3520,32 @@ bool PagedSpace::RawSlowRefillLinearAllocationArea(int size_in_bytes) {
 // -----------------------------------------------------------------------------
 // MapSpace implementation
 
+void MapSpace::SortFreeList() {
+  using LiveBytesPagePair = std::pair<size_t, Page*>;
+  std::vector<LiveBytesPagePair> pages;
+  pages.reserve(CountTotalPages());
+
+  for (Page* p : *this) {
+    free_list()->RemoveCategory(p->free_list_category(kFirstCategory));
+    pages.push_back(std::make_pair(p->allocated_bytes(), p));
+  }
+
+  std::sort(pages.begin(), pages.end(),
+            [](const LiveBytesPagePair& a, const LiveBytesPagePair& b) {
+              return a.first < b.first;
+            });
+
+  for (LiveBytesPagePair const& p : pages) {
+    free_list()->AddCategory(p.second->free_list_category(kFirstCategory));
+  }
+}
+
 #ifdef VERIFY_HEAP
 void MapSpace::VerifyObject(HeapObject object) { CHECK(object.IsMap()); }
 #endif
+
+// -----------------------------------------------------------------------------
+// ReadOnlySpace implementation
 
 ReadOnlySpace::ReadOnlySpace(Heap* heap)
     : PagedSpace(heap, RO_SPACE, NOT_EXECUTABLE, FreeList::CreateFreeList()),
