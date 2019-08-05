@@ -928,6 +928,8 @@ DEFINE_BOOL(gc_experiment_background_schedule, false,
             "new background GC schedule heuristics")
 DEFINE_BOOL(gc_experiment_less_compaction, false,
             "less compaction in non-memory reducing mode")
+DEFINE_BOOL(gc_experiment_sort_map_space, true,
+            "sort map space to fullest pages first in the freelists")
 
 DEFINE_BOOL(disable_abortjs, false, "disables AbortJS runtime function")
 

@@ -221,6 +221,7 @@ class FreeListCategory {
 
   friend class FreeList;
   friend class PagedSpace;
+  friend class MapSpace;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(FreeListCategory);
 };
@@ -370,6 +371,7 @@ class FreeList {
   friend class Page;
   friend class MemoryChunk;
   friend class ReadOnlyPage;
+  friend class MapSpace;
 };
 
 // FreeList used for spaces that don't have freelists
@@ -2989,6 +2991,8 @@ class MapSpace : public PagedSpace {
       return (size / Map::kSize) * Map::kSize;
     }
   }
+
+  void SortFreeList();
 
 #ifdef VERIFY_HEAP
   void VerifyObject(HeapObject obj) override;
