@@ -44,6 +44,7 @@ class AllocationObserver;
 class CompactionSpace;
 class CompactionSpaceCollection;
 class FreeList;
+class FreeListLinked;
 class Isolate;
 class LinearAllocationArea;
 class LocalArrayBufferTracker;
@@ -143,19 +144,17 @@ class FreeListCategory {
         page_(page),
         type_(kInvalidCategory),
         available_(0),
-        length_(0),
-        prev_(nullptr),
-        next_(nullptr) {}
+        length_(0) {}
 
-  void Initialize(FreeListCategoryType type) {
+  virtual ~FreeListCategory() = default;
+
+  virtual void Initialize(FreeListCategoryType type) {
     type_ = type;
     available_ = 0;
     length_ = 0;
-    prev_ = nullptr;
-    next_ = nullptr;
   }
 
-  void Reset();
+  virtual void Reset();
 
   void RepairFreeList(Heap* heap);
 
@@ -172,11 +171,13 @@ class FreeListCategory {
 
   // Picks a node of at least |minimum_size| from the category. Stores the
   // actual size in |node_size|. Returns nullptr if no node is found.
+  // This method iterates at most this whole category and the next ones =>
+  // implementation dependent.
   FreeSpace SearchForNodeInList(size_t minimum_size, size_t* node_size);
 
   inline FreeList* owner();
   inline Page* page() const { return page_; }
-  inline bool is_linked();
+  virtual bool is_linked() { FATAL("This method should be overritten"); }
   bool is_empty() { return top().is_null(); }
   size_t available() const { return available_; }
 
@@ -185,17 +186,13 @@ class FreeListCategory {
   size_t SumFreeList();
   int FreeListLength() { return length_; }
 
- private:
+ protected:
   // For debug builds we accurately compute free lists lengths up until
   // {kVeryLongFreeList} by manually walking the list.
   static const int kVeryLongFreeList = 500;
 
   FreeSpace top() { return top_; }
   void set_top(FreeSpace top) { top_ = top; }
-  FreeListCategory* prev() { return prev_; }
-  void set_prev(FreeListCategory* prev) { prev_ = prev; }
-  FreeListCategory* next() { return next_; }
-  void set_next(FreeListCategory* next) { next_ = next; }
 
   // This FreeListCategory is owned by the given free_list_.
   FreeList* free_list_;
@@ -216,15 +213,58 @@ class FreeListCategory {
   // |top_|: Points to the top FreeSpace in the free list category.
   FreeSpace top_;
 
-  FreeListCategory* prev_;
-  FreeListCategory* next_;
-
   friend class FreeList;
+  friend class FreeListLinked;
   friend class PagedSpace;
   friend class MapSpace;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(FreeListCategory);
 };
+
+// A FreeListCategory for a FreeList implemented as a doubly linked list of
+// FreeListCategories.
+class FreeListCategoryLinked final : public FreeListCategory {
+ public:
+  FreeListCategoryLinked(FreeListLinked* free_list, Page* page);
+
+  void Initialize(FreeListCategoryType type) override {
+    FreeListCategory::Initialize(type);
+    prev_ = nullptr;
+    next_ = nullptr;
+  }
+
+  void Reset() override;
+  inline bool is_linked() final;
+
+ private:
+  FreeListCategoryLinked* prev() { return prev_; }
+  void set_prev(FreeListCategoryLinked* prev) { prev_ = prev; }
+  FreeListCategoryLinked* next() { return next_; }
+  void set_next(FreeListCategoryLinked* next) { next_ = next; }
+
+  inline FreeListLinked* free_list();
+
+  FreeListCategoryLinked* prev_;
+  FreeListCategoryLinked* next_;
+
+  friend class FreeList;
+  friend class FreeListLinked;
+  friend class PagedSpace;
+  friend class MapSpace;
+
+  DISALLOW_IMPLICIT_CONSTRUCTORS(FreeListCategoryLinked);
+};
+
+// A FreeListCategory for a FreeList implemented as a heap. (note that the term
+// "heap" here refers to the datastructure and not to the memory area). This
+// Category is not linked with the next ones: FreeListHeap takes care of linking
+// them.
+// class FreeListCategoryHeapSingleCat final : public FreeListCategory {
+//   FreeListCategoryHeapSingleCat(FreeList* free_list, Page* page)
+//       : FreeListCategory(free_list, page) {}
+
+//   DISALLOW_IMPLICIT_CONSTRUCTORS(FreeListCategoryHeapSingleCat);
+// };
 
 // A free list maintains free blocks of memory. The free list is organized in
 // a way to encourage objects allocated around the same time to be near each
@@ -237,6 +277,8 @@ class FreeList {
  public:
   // Creates a Freelist of the default class (FreeListLegacy for now).
   V8_EXPORT_PRIVATE static FreeList* CreateFreeList();
+
+  virtual FreeListCategory** AllocateCategoriesForPage(Page* page) = 0;
 
   virtual ~FreeList() = default;
 
@@ -262,41 +304,118 @@ class FreeList {
   // Returns a page containing an entry for a given type, or nullptr otherwise.
   V8_EXPORT_PRIVATE virtual Page* GetPageForSize(size_t size_in_bytes) = 0;
 
-  void Reset();
+  virtual void Reset() = 0;
 
   // Return the number of bytes available on the free list.
-  size_t Available() {
-    size_t available = 0;
-    ForAllFreeListCategories([&available](FreeListCategory* category) {
-      available += category->available();
-    });
-    return available;
-  }
+  virtual size_t Available() = 0;
 
-  bool IsEmpty() {
-    bool empty = true;
-    ForAllFreeListCategories([&empty](FreeListCategory* category) {
-      if (!category->is_empty()) empty = false;
-    });
-    return empty;
-  }
+  virtual bool IsEmpty() = 0;
 
   // Used after booting the VM.
-  void RepairLists(Heap* heap);
+  virtual void RepairLists(Heap* heap) = 0;
 
-  V8_EXPORT_PRIVATE size_t EvictFreeListItems(Page* page);
-  bool ContainsPageFreeListItems(Page* page);
+  virtual V8_EXPORT_PRIVATE size_t EvictFreeListItems(Page* page) = 0;
+  virtual bool ContainsPageFreeListItems(Page* page) = 0;
 
   int number_of_categories() { return number_of_categories_; }
   FreeListCategoryType last_category() { return last_category_; }
 
   size_t wasted_bytes() { return wasted_bytes_; }
 
+  virtual bool AddCategory(FreeListCategory* category) = 0;
+  virtual V8_EXPORT_PRIVATE void RemoveCategory(FreeListCategory* category) = 0;
+  virtual void PrintCategories(FreeListCategoryType type) = 0;
+
+#ifdef DEBUG
+  virtual size_t SumFreeLists() = 0;
+  virtual bool IsVeryLong() = 0;
+#endif
+
+ protected:
+  // Tries to retrieve a node from the first category in a given |type|.
+  // Returns nullptr if the category is empty or the top entry is smaller
+  // than minimum_size.
+  virtual FreeSpace TryFindNodeIn(FreeListCategoryType type,
+                                  size_t minimum_size, size_t* node_size) = 0;
+
+  // Searches a given |type| for a node of at least |minimum_size|.
+  virtual FreeSpace SearchForNodeInList(FreeListCategoryType type,
+                                        size_t minimum_size,
+                                        size_t* node_size) = 0;
+
+  // Returns the smallest category in which an object of |size_in_bytes| could
+  // fit.
+  virtual FreeListCategoryType SelectFreeListCategoryType(
+      size_t size_in_bytes) = 0;
+
+  virtual FreeListCategory* top(FreeListCategoryType type) = 0;
+
+  Page* GetPageForCategoryType(FreeListCategoryType type) {
+    return top(type) ? top(type)->page() : nullptr;
+  }
+
+  int number_of_categories_ = 0;
+  FreeListCategoryType last_category_ = 0;
+  size_t min_block_size_ = 0;
+
+  std::atomic<size_t> wasted_bytes_{0};
+
+  friend class FreeListCategory;
+  friend class Page;
+  friend class MemoryChunk;
+  friend class ReadOnlyPage;
+  friend class MapSpace;
+};
+
+// A free list maintains free blocks of memory. The free list is organized in
+// a way to encourage objects allocated around the same time to be near each
+// other. The normal way to allocate is intended to be by bumping a 'top'
+// pointer until it hits a 'limit' pointer.  When the limit is hit we need to
+// find a new space to allocate from. This is done with the free list, which is
+// divided up into rough categories to cut down on waste. Having finer
+// categories would scatter allocation more.
+class FreeListLinked : public FreeList {
+ public:
+  FreeListCategory** AllocateCategoriesForPage(Page* page) override {
+    FreeListCategoryLinked** categories;
+    categories = new FreeListCategoryLinked*[number_of_categories()]();
+    for (int i = kFirstCategory; i <= last_category(); i++) {
+      DCHECK_NULL(categories[i]);
+      categories[i] = new FreeListCategoryLinked(this, page);
+    }
+    return reinterpret_cast<FreeListCategory**>(categories);
+  }
+
+  void Reset() override;
+
+  // Return the number of bytes available on the free list.
+  size_t Available() override {
+    size_t available = 0;
+    ForAllFreeListCategories([&available](FreeListCategoryLinked* category) {
+      available += category->available();
+    });
+    return available;
+  }
+
+  bool IsEmpty() override {
+    bool empty = true;
+    ForAllFreeListCategories([&empty](FreeListCategoryLinked* category) {
+      if (!category->is_empty()) empty = false;
+    });
+    return empty;
+  }
+
+  // Used after booting the VM.
+  void RepairLists(Heap* heap) override;
+
+  V8_EXPORT_PRIVATE size_t EvictFreeListItems(Page* page) override;
+  bool ContainsPageFreeListItems(Page* page) override;
+
   template <typename Callback>
   void ForAllFreeListCategories(FreeListCategoryType type, Callback callback) {
-    FreeListCategory* current = categories_[type];
+    FreeListCategoryLinked* current = categories_[type];
     while (current != nullptr) {
-      FreeListCategory* next = current->next();
+      FreeListCategoryLinked* next = current->next();
       callback(current);
       current = next;
     }
@@ -309,65 +428,59 @@ class FreeList {
     }
   }
 
-  bool AddCategory(FreeListCategory* category);
-  V8_EXPORT_PRIVATE void RemoveCategory(FreeListCategory* category);
-  void PrintCategories(FreeListCategoryType type);
+  bool AddCategory(FreeListCategoryLinked* category);
+  bool AddCategory(FreeListCategory* category) override {
+    return AddCategory(static_cast<FreeListCategoryLinked*>(category));
+  }
+  V8_EXPORT_PRIVATE void RemoveCategory(FreeListCategoryLinked* category);
+  V8_EXPORT_PRIVATE void RemoveCategory(FreeListCategory* category) override {
+    RemoveCategory(static_cast<FreeListCategoryLinked*>(category));
+  }
+  void PrintCategories(FreeListCategoryType type) override;
 
 #ifdef DEBUG
-  size_t SumFreeLists();
-  bool IsVeryLong();
+  size_t SumFreeLists() override;
+  bool IsVeryLong() override;
 #endif
 
  protected:
-  class FreeListCategoryIterator final {
+  class FreeListCategoryLinkedIterator final {
    public:
-    FreeListCategoryIterator(FreeList* free_list, FreeListCategoryType type)
+    FreeListCategoryLinkedIterator(FreeListLinked* free_list,
+                                   FreeListCategoryType type)
         : current_(free_list->categories_[type]) {}
 
     bool HasNext() const { return current_ != nullptr; }
 
-    FreeListCategory* Next() {
+    FreeListCategoryLinked* Next() {
       DCHECK(HasNext());
-      FreeListCategory* tmp = current_;
+      FreeListCategoryLinked* tmp = current_;
       current_ = current_->next();
       return tmp;
     }
 
    private:
-    FreeListCategory* current_;
+    FreeListCategoryLinked* current_;
   };
 
   // Tries to retrieve a node from the first category in a given |type|.
   // Returns nullptr if the category is empty or the top entry is smaller
   // than minimum_size.
   FreeSpace TryFindNodeIn(FreeListCategoryType type, size_t minimum_size,
-                          size_t* node_size);
+                          size_t* node_size) override;
 
   // Searches a given |type| for a node of at least |minimum_size|.
   FreeSpace SearchForNodeInList(FreeListCategoryType type, size_t minimum_size,
-                                size_t* node_size);
+                                size_t* node_size) override;
 
-  // Returns the smallest category in which an object of |size_in_bytes| could
-  // fit.
-  virtual FreeListCategoryType SelectFreeListCategoryType(
-      size_t size_in_bytes) = 0;
-
-  FreeListCategory* top(FreeListCategoryType type) const {
+  FreeListCategory* top(FreeListCategoryType type) override {
     return categories_[type];
   }
 
-  Page* GetPageForCategoryType(FreeListCategoryType type) {
-    return top(type) ? top(type)->page() : nullptr;
-  }
-
-  int number_of_categories_ = 0;
-  FreeListCategoryType last_category_ = 0;
-  size_t min_block_size_ = 0;
-
-  std::atomic<size_t> wasted_bytes_{0};
-  FreeListCategory** categories_ = nullptr;
+  FreeListCategoryLinked** categories_ = nullptr;
 
   friend class FreeListCategory;
+  friend class FreeListCategoryLinked;
   friend class Page;
   friend class MemoryChunk;
   friend class ReadOnlyPage;
@@ -378,6 +491,9 @@ class FreeList {
 // (only the LargeObject space for now).
 class NoFreeList final : public FreeList {
  public:
+  FreeListCategory** AllocateCategoriesForPage(Page* page) final {
+    FATAL("NoFreeList can't be used as a standard FreeList. ");
+  }
   size_t GuaranteedAllocatable(size_t maximum_freed) final {
     FATAL("NoFreeList can't be used as a standard FreeList. ");
   }
@@ -389,6 +505,54 @@ class NoFreeList final : public FreeList {
     FATAL("NoFreeList can't be used as a standard FreeList.");
   }
   Page* GetPageForSize(size_t size_in_bytes) final {
+    FATAL("NoFreeList can't be used as a standard FreeList.");
+  }
+  void Reset() final {
+    FATAL("NoFreeList can't be used as a standard FreeList.");
+  }
+  size_t Available() final {
+    FATAL("NoFreeList can't be used as a standard FreeList.");
+  }
+  bool IsEmpty() final {
+    FATAL("NoFreeList can't be used as a standard FreeList.");
+  }
+  void RepairLists(Heap* heap) final {
+    FATAL("NoFreeList can't be used as a standard FreeList.");
+  }
+  V8_EXPORT_PRIVATE size_t EvictFreeListItems(Page* page) final {
+    FATAL("NoFreeList can't be used as a standard FreeList.");
+  }
+  bool ContainsPageFreeListItems(Page* page) final {
+    FATAL("NoFreeList can't be used as a standard FreeList.");
+  }
+  bool AddCategory(FreeListCategory* category) {
+    FATAL("NoFreeList can't be used as a standard FreeList.");
+  }
+  V8_EXPORT_PRIVATE void RemoveCategory(FreeListCategory* category) final {
+    FATAL("NoFreeList can't be used as a standard FreeList.");
+  }
+  void PrintCategories(FreeListCategoryType type) final {
+    FATAL("NoFreeList can't be used as a standard FreeList.");
+  }
+#ifdef DEBUG
+  size_t SumFreeLists() final {
+    FATAL("NoFreeList can't be used as a standard FreeList.");
+  }
+  bool IsVeryLong() final {
+    FATAL("NoFreeList can't be used as a standard FreeList.");
+  }
+#endif
+
+ protected:
+  FreeSpace TryFindNodeIn(FreeListCategoryType type, size_t minimum_size,
+                          size_t* node_size) final {
+    FATAL("NoFreeList can't be used as a standard FreeList.");
+  }
+  FreeSpace SearchForNodeInList(FreeListCategoryType type, size_t minimum_size,
+                                size_t* node_size) final {
+    FATAL("NoFreeList can't be used as a standard FreeList.");
+  }
+  FreeListCategory* top(FreeListCategoryType type) final {
     FATAL("NoFreeList can't be used as a standard FreeList.");
   }
 
@@ -1798,7 +1962,7 @@ class AllocationStats {
 //   words in size.
 // At least 16384 words (huge): This list is for objects of 2048 words or
 //   larger. Empty pages are also added to this list.
-class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
+class V8_EXPORT_PRIVATE FreeListLegacy : public FreeListLinked {
  public:
   size_t GuaranteedAllocatable(size_t maximum_freed) override {
     if (maximum_freed <= kTiniestListMax) {
@@ -1902,7 +2066,7 @@ class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
 // considered though). Performances is supposed to be better than
 // FreeListLegacy, but memory usage should be higher (because fragmentation will
 // probably be higher).
-class V8_EXPORT_PRIVATE FreeListFastAlloc : public FreeList {
+class V8_EXPORT_PRIVATE FreeListFastAlloc : public FreeListLinked {
  public:
   size_t GuaranteedAllocatable(size_t maximum_freed) override {
     if (maximum_freed <= kMediumListMax) {
@@ -1969,7 +2133,7 @@ class V8_EXPORT_PRIVATE FreeListFastAlloc : public FreeList {
 // first element of each category though).
 // Performances are expected to be worst than FreeListLegacy, but memory
 // consumption should be lower (since fragmentation should be lower).
-class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
+class V8_EXPORT_PRIVATE FreeListMany : public FreeListLinked {
  public:
   size_t GuaranteedAllocatable(size_t maximum_freed) override;
 
@@ -2017,7 +2181,7 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
 };
 
 // FreeList for maps: since maps are all the same size, uses a single freelist.
-class V8_EXPORT_PRIVATE FreeListMap : public FreeList {
+class V8_EXPORT_PRIVATE FreeListMap : public FreeListLinked {
  public:
   size_t GuaranteedAllocatable(size_t maximum_freed) override;
 

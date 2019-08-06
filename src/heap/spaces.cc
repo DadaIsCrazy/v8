@@ -819,12 +819,7 @@ LargePage* LargePage::Initialize(Heap* heap, MemoryChunk* chunk,
 
 void Page::AllocateFreeListCategories() {
   DCHECK_NULL(categories_);
-  categories_ = new FreeListCategory*[free_list()->number_of_categories()]();
-  for (int i = kFirstCategory; i <= free_list()->last_category(); i++) {
-    DCHECK_NULL(categories_[i]);
-    categories_[i] = new FreeListCategory(
-        reinterpret_cast<PagedSpace*>(owner())->free_list(), this);
-  }
+  categories_ = free_list()->AllocateCategoriesForPage(this);
 }
 
 void Page::InitializeFreeListCategories() {
@@ -2944,13 +2939,20 @@ size_t NewSpace::CommittedPhysicalMemory() {
 // -----------------------------------------------------------------------------
 // Free lists for old object spaces implementation
 
+FreeListCategoryLinked::FreeListCategoryLinked(FreeListLinked* free_list,
+                                               Page* page)
+    : FreeListCategory(free_list, page), prev_(nullptr), next_(nullptr) {}
 
 void FreeListCategory::Reset() {
   set_top(FreeSpace());
-  set_prev(nullptr);
-  set_next(nullptr);
   available_ = 0;
   length_ = 0;
+}
+
+void FreeListCategoryLinked::Reset() {
+  FreeListCategory::Reset();
+  set_prev(nullptr);
+  set_next(nullptr);
 }
 
 FreeSpace FreeListCategory::PickNodeFromList(size_t minimum_size,
@@ -3044,9 +3046,10 @@ FreeList* FreeList::CreateFreeList() {
   }
 }
 
-FreeSpace FreeList::TryFindNodeIn(FreeListCategoryType type,
-                                  size_t minimum_size, size_t* node_size) {
-  FreeListCategory* category = categories_[type];
+FreeSpace FreeListLinked::TryFindNodeIn(FreeListCategoryType type,
+                                        size_t minimum_size,
+                                        size_t* node_size) {
+  FreeListCategoryLinked* category = categories_[type];
   if (category == nullptr) return FreeSpace();
   FreeSpace node = category->PickNodeFromList(minimum_size, node_size);
   if (!node.is_null()) {
@@ -3058,13 +3061,13 @@ FreeSpace FreeList::TryFindNodeIn(FreeListCategoryType type,
   return node;
 }
 
-FreeSpace FreeList::SearchForNodeInList(FreeListCategoryType type,
-                                        size_t minimum_size,
-                                        size_t* node_size) {
-  FreeListCategoryIterator it(this, type);
+FreeSpace FreeListLinked::SearchForNodeInList(FreeListCategoryType type,
+                                              size_t minimum_size,
+                                              size_t* node_size) {
+  FreeListCategoryLinkedIterator it(this, type);
   FreeSpace node;
   while (it.HasNext()) {
-    FreeListCategory* current = it.Next();
+    FreeListCategoryLinked* current = it.Next();
     node = current->SearchForNodeInList(minimum_size, node_size);
     if (!node.is_null()) {
       DCHECK(IsVeryLong() || Available() == SumFreeLists());
@@ -3105,7 +3108,7 @@ FreeListLegacy::FreeListLegacy() {
   number_of_categories_ = kHuge + 1;
   last_category_ = kHuge;
   min_block_size_ = kMinBlockSize;
-  categories_ = new FreeListCategory*[number_of_categories_]();
+  categories_ = new FreeListCategoryLinked*[number_of_categories_]();
 
   Reset();
 }
@@ -3163,7 +3166,7 @@ FreeListFastAlloc::FreeListFastAlloc() {
   number_of_categories_ = kHuge + 1;
   last_category_ = kHuge;
   min_block_size_ = kMinBlockSize;
-  categories_ = new FreeListCategory*[number_of_categories_]();
+  categories_ = new FreeListCategoryLinked*[number_of_categories_]();
 
   Reset();
 }
@@ -3208,7 +3211,7 @@ FreeListMany::FreeListMany() {
   number_of_categories_ = kNumberOfCategories;
   last_category_ = number_of_categories_ - 1;
   min_block_size_ = kMinBlockSize;
-  categories_ = new FreeListCategory*[number_of_categories_]();
+  categories_ = new FreeListCategoryLinked*[number_of_categories_]();
 
   Reset();
 }
@@ -3267,7 +3270,7 @@ FreeListMap::FreeListMap() {
   number_of_categories_ = 1;
   last_category_ = kOnlyCategory;
   min_block_size_ = kMinBlockSize;
-  categories_ = new FreeListCategory*[number_of_categories_]();
+  categories_ = new FreeListCategoryLinked*[number_of_categories_]();
 
   Reset();
 }
@@ -3305,7 +3308,7 @@ FreeSpace FreeListMap::Allocate(size_t size_in_bytes, size_t* node_size) {
 // ------------------------------------------------
 // Generic FreeList methods (non alloc/free related)
 
-void FreeList::Reset() {
+void FreeListLinked::Reset() {
   ForAllFreeListCategories(
       [](FreeListCategory* category) { category->Reset(); });
   for (int i = kFirstCategory; i < number_of_categories_; i++) {
@@ -3314,7 +3317,7 @@ void FreeList::Reset() {
   wasted_bytes_ = 0;
 }
 
-size_t FreeList::EvictFreeListItems(Page* page) {
+size_t FreeListLinked::EvictFreeListItems(Page* page) {
   size_t sum = 0;
   page->ForAllFreeListCategories([this, &sum](FreeListCategory* category) {
     DCHECK_EQ(this, category->owner());
@@ -3325,7 +3328,7 @@ size_t FreeList::EvictFreeListItems(Page* page) {
   return sum;
 }
 
-bool FreeList::ContainsPageFreeListItems(Page* page) {
+bool FreeListLinked::ContainsPageFreeListItems(Page* page) {
   bool contained = false;
   page->ForAllFreeListCategories(
       [this, &contained](FreeListCategory* category) {
@@ -3336,15 +3339,15 @@ bool FreeList::ContainsPageFreeListItems(Page* page) {
   return contained;
 }
 
-void FreeList::RepairLists(Heap* heap) {
+void FreeListLinked::RepairLists(Heap* heap) {
   ForAllFreeListCategories(
       [heap](FreeListCategory* category) { category->RepairFreeList(heap); });
 }
 
-bool FreeList::AddCategory(FreeListCategory* category) {
+bool FreeListLinked::AddCategory(FreeListCategoryLinked* category) {
   FreeListCategoryType type = category->type_;
   DCHECK_LT(type, number_of_categories_);
-  FreeListCategory* top = categories_[type];
+  FreeListCategoryLinked* top = categories_[type];
 
   if (category->is_empty()) return false;
   DCHECK_NE(top, category);
@@ -3358,10 +3361,10 @@ bool FreeList::AddCategory(FreeListCategory* category) {
   return true;
 }
 
-void FreeList::RemoveCategory(FreeListCategory* category) {
+void FreeListLinked::RemoveCategory(FreeListCategoryLinked* category) {
   FreeListCategoryType type = category->type_;
   DCHECK_LT(type, number_of_categories_);
-  FreeListCategory* top = categories_[type];
+  FreeListCategoryLinked* top = categories_[type];
 
   // Common double-linked list removal.
   if (top == category) {
@@ -3377,12 +3380,12 @@ void FreeList::RemoveCategory(FreeListCategory* category) {
   category->set_prev(nullptr);
 }
 
-void FreeList::PrintCategories(FreeListCategoryType type) {
-  FreeListCategoryIterator it(this, type);
+void FreeListLinked::PrintCategories(FreeListCategoryType type) {
+  FreeListCategoryLinkedIterator it(this, type);
   PrintF("FreeList[%p, top=%p, %d] ", static_cast<void*>(this),
          static_cast<void*>(categories_[type]), type);
   while (it.HasNext()) {
-    FreeListCategory* current = it.Next();
+    FreeListCategoryLinked* current = it.Next();
     PrintF("%p -> ", static_cast<void*>(current));
   }
   PrintF("null\n");
@@ -3413,10 +3416,11 @@ size_t FreeListCategory::SumFreeList() {
 }
 
 #ifdef DEBUG
-bool FreeList::IsVeryLong() {
+bool FreeListLinked::IsVeryLong() {
   int len = 0;
   for (int i = kFirstCategory; i < number_of_categories_; i++) {
-    FreeListCategoryIterator it(this, static_cast<FreeListCategoryType>(i));
+    FreeListCategoryLinkedIterator it(this,
+                                      static_cast<FreeListCategoryType>(i));
     while (it.HasNext()) {
       len += it.Next()->FreeListLength();
       if (len >= FreeListCategory::kVeryLongFreeList) return true;
@@ -3425,11 +3429,10 @@ bool FreeList::IsVeryLong() {
   return false;
 }
 
-
 // This can take a very long time because it is linear in the number of entries
 // on the free list, so it should not be called if FreeListLength returns
 // kVeryLongFreeList.
-size_t FreeList::SumFreeLists() {
+size_t FreeListLinked::SumFreeLists() {
   size_t sum = 0;
   ForAllFreeListCategories(
       [&sum](FreeListCategory* category) { sum += category->SumFreeList(); });

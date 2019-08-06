@@ -315,11 +315,15 @@ MemoryChunk* OldGenerationMemoryChunkIterator::next() {
   UNREACHABLE();
 }
 
+FreeListLinked* FreeListCategoryLinked::free_list() {
+  return static_cast<FreeListLinked*>(free_list_);
+}
+
 FreeList* FreeListCategory::owner() { return free_list_; }
 
-bool FreeListCategory::is_linked() {
+bool FreeListCategoryLinked::is_linked() {
   return prev_ != nullptr || next_ != nullptr ||
-         free_list_->categories_[type_] == this;
+         free_list()->categories_[type_] == this;
 }
 
 AllocationResult LocalAllocationBuffer::AllocateRawAligned(
