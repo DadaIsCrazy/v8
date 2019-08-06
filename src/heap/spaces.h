@@ -43,7 +43,7 @@ class TestCodePageAllocatorScope;
 class AllocationObserver;
 class CompactionSpace;
 class CompactionSpaceCollection;
-class FreeList;
+template <class FreeListUnderlyingImplementation>class FreeList;
 class Isolate;
 class LinearAllocationArea;
 class LocalArrayBufferTracker;
@@ -136,26 +136,23 @@ enum RememberedSetType {
 };
 
 // A free list category maintains a linked list of free memory blocks.
+template <class FLUI>
 class FreeListCategory {
  public:
-  FreeListCategory(FreeList* free_list, Page* page)
+  FreeListCategory(FreeList<FLUI>* free_list, Page* page)
       : free_list_(free_list),
         page_(page),
         type_(kInvalidCategory),
         available_(0),
-        length_(0),
-        prev_(nullptr),
-        next_(nullptr) {}
+        length_(0) {}
 
-  void Initialize(FreeListCategoryType type) {
+  virtual void Initialize(FreeListCategoryType type) {
     type_ = type;
     available_ = 0;
     length_ = 0;
-    prev_ = nullptr;
-    next_ = nullptr;
   }
 
-  void Reset();
+  virtual void Reset();
 
   void RepairFreeList(Heap* heap);
 
@@ -172,15 +169,17 @@ class FreeListCategory {
 
   // Picks a node of at least |minimum_size| from the category. Stores the
   // actual size in |node_size|. Returns nullptr if no node is found.
-  FreeSpace SearchForNodeInList(size_t minimum_size, size_t* node_size);
+  // This method iterates at most this whole category and the next ones =>
+  // implementation dependent.
+  virtual FreeSpace SearchForNodeInList(size_t minimum_size, size_t* node_size) = 0;
 
-  inline FreeList* owner();
+  inline FreeList<FLUI>* owner();
   inline Page* page() const { return page_; }
   inline bool is_linked();
   bool is_empty() { return top().is_null(); }
   size_t available() const { return available_; }
 
-  void set_free_list(FreeList* free_list) { free_list_ = free_list; }
+  void set_free_list(FreeList<FLUI>* free_list) { free_list_ = free_list; }
 
   size_t SumFreeList();
   int FreeListLength() { return length_; }
@@ -192,13 +191,9 @@ class FreeListCategory {
 
   FreeSpace top() { return top_; }
   void set_top(FreeSpace top) { top_ = top; }
-  FreeListCategory* prev() { return prev_; }
-  void set_prev(FreeListCategory* prev) { prev_ = prev; }
-  FreeListCategory* next() { return next_; }
-  void set_next(FreeListCategory* next) { next_ = next; }
 
   // This FreeListCategory is owned by the given free_list_.
-  FreeList* free_list_;
+  FreeList<FLUI>* free_list_;
 
   // This FreeListCategory holds free list entries of the given page_.
   Page* const page_;
@@ -216,15 +211,66 @@ class FreeListCategory {
   // |top_|: Points to the top FreeSpace in the free list category.
   FreeSpace top_;
 
-  FreeListCategory* prev_;
-  FreeListCategory* next_;
-
-  friend class FreeList;
+  friend class FreeList<FLUI>;
   friend class PagedSpace;
   friend class MapSpace;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(FreeListCategory);
 };
+
+// A FreeListCategory for a FreeList implemented as a doubly linked list of
+// FreeListCategories.
+template <class FLUI>
+    class FreeListCategoryLinkedList : public FreeListCategory<FLUI> {
+ public:
+  FreeListCategoryLinkedList(FreeList<FLUI>* free_list, Page* page)
+      : FreeListCategory<FLUI>(free_list, page),
+        prev_(nullptr),
+        next_(nullptr) {}
+
+  void Initialize(FreeListCategoryType type) override {
+    FreeListCategory<FLUI>::Initialize(type);
+    prev_ = nullptr;
+    next_ = nullptr;
+  }
+
+  void Reset() override;
+
+  // Picks a node of at least |minimum_size| from the category. Stores the
+  // actual size in |node_size|. Returns nullptr if no node is found.
+  FreeSpace SearchForNodeInList(size_t minimum_size, size_t* node_size) override;
+
+ private:
+  FreeListCategory<FLUI>* prev() { return prev_; }
+  void set_prev(FreeListCategory<FLUI>* prev) { prev_ = prev; }
+  FreeListCategory<FLUI>* next() { return next_; }
+  void set_next(FreeListCategory<FLUI>* next) { next_ = next; }
+
+  FreeListCategory<FLUI>* prev_;
+  FreeListCategory<FLUI>* next_;
+
+  friend class FreeList<FLUI>;
+  friend class PagedSpace;
+  friend class MapSpace;
+
+  DISALLOW_IMPLICIT_CONSTRUCTORS(FreeListCategoryLinkedList);
+};
+
+// A FreeListCategory for a FreeList implemented as a heap. (note that the term
+// "heap" here refers to the datastructure and not to the memory area). This
+// Category is not linked with the next ones: FreeListHeap takes care of linking
+// them.
+template <class FLUI>
+    class FreeListCategoryHeapSingleCat : public FreeListCategory<FLUI> {
+  FreeListCategoryHeapSingleCat(FreeList<FLUI>* free_list, Page* page)
+      : FreeListCategory<FLUI>(free_list, page) {}
+
+  FreeSpace SearchForNodeInList(size_t minimum_size, size_t* node_size) override {
+    FATAL("FreeListCategoryHeapSingleCat should not use SearchForNodeInList.");
+  }
+};
+
+
 
 // A free list maintains free blocks of memory. The free list is organized in
 // a way to encourage objects allocated around the same time to be near each
@@ -233,10 +279,15 @@ class FreeListCategory {
 // find a new space to allocate from. This is done with the free list, which is
 // divided up into rough categories to cut down on waste. Having finer
 // categories would scatter allocation more.
+// FLUI stands for FreeListUnderlyingImplementation
+template <class FLUI>
 class FreeList {
  public:
   // Creates a Freelist of the default class (FreeListLegacy for now).
   V8_EXPORT_PRIVATE static FreeList* CreateFreeList();
+
+  FreeList(FLUI* free_list) :
+      free_list_(free_list) {}
 
   virtual ~FreeList() = default;
 
@@ -267,7 +318,7 @@ class FreeList {
   // Return the number of bytes available on the free list.
   size_t Available() {
     size_t available = 0;
-    ForAllFreeListCategories([&available](FreeListCategory* category) {
+    ForAllFreeListCategories([&available](FreeListCategory<FreeList<FLUI>>* category) {
       available += category->available();
     });
     return available;
@@ -275,7 +326,7 @@ class FreeList {
 
   bool IsEmpty() {
     bool empty = true;
-    ForAllFreeListCategories([&empty](FreeListCategory* category) {
+    ForAllFreeListCategories([&empty](FreeListCategory<FreeList<FLUI>>* category) {
       if (!category->is_empty()) empty = false;
     });
     return empty;
@@ -294,66 +345,55 @@ class FreeList {
 
   template <typename Callback>
   void ForAllFreeListCategories(FreeListCategoryType type, Callback callback) {
-    FreeListCategory* current = categories_[type];
-    while (current != nullptr) {
-      FreeListCategory* next = current->next();
-      callback(current);
-      current = next;
-    }
+    free_list_->ForAllFreeListCategories(type, callback);
   }
 
   template <typename Callback>
   void ForAllFreeListCategories(Callback callback) {
-    for (int i = kFirstCategory; i < number_of_categories(); i++) {
-      ForAllFreeListCategories(static_cast<FreeListCategoryType>(i), callback);
-    }
+    free_list_->ForAllFreeListCategories(callback);
   }
 
-  bool AddCategory(FreeListCategory* category);
-  V8_EXPORT_PRIVATE void RemoveCategory(FreeListCategory* category);
-  void PrintCategories(FreeListCategoryType type);
+  bool AddCategory(FreeListCategory<FreeList<FLUI>>* category) {
+    return free_list_->AddCategory(category);
+  }
+  V8_EXPORT_PRIVATE void RemoveCategory(FreeListCategory<FreeList<FLUI>>* category) {
+    return free_list_->RemoveCategory(category);
+  }
+  void PrintCategories(FreeListCategoryType type) {
+    free_list_->PrintCategories(type);
+  }
 
 #ifdef DEBUG
-  size_t SumFreeLists();
-  bool IsVeryLong();
+  size_t SumFreeLists() {
+    return free_list_->SumFreeLists();
+  }
+  bool IsVeryLong() {
+    return free_list_->IsVeryLong();
+  }
 #endif
 
  protected:
-  class FreeListCategoryIterator final {
-   public:
-    FreeListCategoryIterator(FreeList* free_list, FreeListCategoryType type)
-        : current_(free_list->categories_[type]) {}
-
-    bool HasNext() const { return current_ != nullptr; }
-
-    FreeListCategory* Next() {
-      DCHECK(HasNext());
-      FreeListCategory* tmp = current_;
-      current_ = current_->next();
-      return tmp;
-    }
-
-   private:
-    FreeListCategory* current_;
-  };
-
   // Tries to retrieve a node from the first category in a given |type|.
   // Returns nullptr if the category is empty or the top entry is smaller
   // than minimum_size.
   FreeSpace TryFindNodeIn(FreeListCategoryType type, size_t minimum_size,
-                          size_t* node_size);
+                          size_t* node_size) {
+    return free_list_->TryFindNodeIn(type, minimum_size, node_size);
+  }
 
   // Searches a given |type| for a node of at least |minimum_size|.
   FreeSpace SearchForNodeInList(FreeListCategoryType type, size_t minimum_size,
-                                size_t* node_size);
+                                size_t* node_size) {
+    return free_list_->SearchForNodeInList(type, minimum_size, node_size);
+  }
 
   // Returns the smallest category in which an object of |size_in_bytes| could
   // fit.
   virtual FreeListCategoryType SelectFreeListCategoryType(
       size_t size_in_bytes) = 0;
 
-  FreeListCategory* top(FreeListCategoryType type) const {
-    return categories_[type];
+  FreeListCategory<FreeList<FLUI>>* top(FreeListCategoryType type) const {
+    return free_list_->top(type);
   }
 
   Page* GetPageForCategoryType(FreeListCategoryType type) {
@@ -365,14 +405,77 @@ class FreeList {
   size_t min_block_size_ = 0;
 
   std::atomic<size_t> wasted_bytes_{0};
-  FreeListCategory** categories_ = nullptr;
 
-  friend class FreeListCategory;
+  FLUI* free_list_;
+
+  friend class FreeListCategory<FreeList<FLUI>>;
   friend class Page;
   friend class MemoryChunk;
   friend class ReadOnlyPage;
   friend class MapSpace;
 };
+
+class FreeListLinkedList {
+
+
+  template <typename Callback>
+      void ForAllFreeListCategories(FreeListCategoryType type, Callback callback) {
+    FreeListCategory<FreeList<FreeListLinkedList>>* current = categories_[type];
+    while (current != nullptr) {
+      FreeListCategory<FreeList<FreeListLinkedList>>* next = current->next();
+      callback(current);
+      current = next;
+    }
+  }
+
+  template <typename Callback>
+      void ForAllFreeListCategories(Callback callback) {
+    for (int i = kFirstCategory; i < number_of_categories(); i++) {
+      ForAllFreeListCategories(static_cast<FreeListCategoryType>(i), callback);
+    }
+  }
+
+
+  bool AddCategory(FreeListCategory<FreeList<FreeListLinkedList>>* category);
+  V8_EXPORT_PRIVATE void RemoveCategory(FreeListCategory<FreeList<FreeListLinkedList>>* category);
+  void PrintCategories(FreeListCategoryType type);
+
+#ifdef DEBUG
+  size_t SumFreeLists();
+  bool IsVeryLong();
+#endif
+
+ protected:
+  class FreeListCategoryIterator final {
+   public:
+    FreeListCategoryIterator(FreeListLinkedList* free_list, FreeListCategoryType type)
+        : current_(free_list->categories_[type]) {}
+
+    bool HasNext() const { return current_ != nullptr; }
+
+    FreeListCategory<FreeList<FreeListLinkedList>>* Next() {
+      DCHECK(HasNext());
+      FreeListCategory<FreeList<FreeListLinkedList>>* tmp = current_;
+      current_ = current_->next();
+      return tmp;
+    }
+
+   private:
+    FreeListCategory<FreeList<FreeListLinkedList>>* current_;
+  };
+
+  FreeSpace TryFindNodeIn(FreeListCategoryType type, size_t minimum_size,
+                          size_t* node_size);
+
+  FreeSpace SearchForNodeInList(FreeListCategoryType type, size_t minimum_size,
+                                size_t* node_size);
+
+  FreeListCategory<FreeList<FreeListLinkedList>>* top(FreeListCategoryType type) const {
+    return categories_[type];
+  }
+
+  FreeListCategory<FreeList<FreeListLinkedList>>** categories_ = nullptr;
+}
 
 // FreeList used for spaces that don't have freelists
 // (only the LargeObject space for now).

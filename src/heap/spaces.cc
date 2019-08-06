@@ -3010,7 +3010,7 @@ FreeList* FreeList::CreateFreeList() {
   }
 }
 
-FreeSpace FreeList::TryFindNodeIn(FreeListCategoryType type,
+FreeSpace FreeListLinkedList::TryFindNodeIn(FreeListCategoryType type,
                                   size_t minimum_size, size_t* node_size) {
   FreeListCategory* category = categories_[type];
   if (category == nullptr) return FreeSpace();
@@ -3024,7 +3024,7 @@ FreeSpace FreeList::TryFindNodeIn(FreeListCategoryType type,
   return node;
 }
 
-FreeSpace FreeList::SearchForNodeInList(FreeListCategoryType type,
+FreeSpace FreeListLinkedList::SearchForNodeInList(FreeListCategoryType type,
                                         size_t minimum_size,
                                         size_t* node_size) {
   FreeListCategoryIterator it(this, type);
@@ -3307,7 +3307,7 @@ void FreeList::RepairLists(Heap* heap) {
       [heap](FreeListCategory* category) { category->RepairFreeList(heap); });
 }
 
-bool FreeList::AddCategory(FreeListCategory* category) {
+bool FreeListLinkedList::AddCategory(FreeListCategory* category) {
   FreeListCategoryType type = category->type_;
   DCHECK_LT(type, number_of_categories_);
   FreeListCategory* top = categories_[type];
@@ -3324,7 +3324,7 @@ bool FreeList::AddCategory(FreeListCategory* category) {
   return true;
 }
 
-void FreeList::RemoveCategory(FreeListCategory* category) {
+void FreeListLinkedList::RemoveCategory(FreeListCategory* category) {
   FreeListCategoryType type = category->type_;
   DCHECK_LT(type, number_of_categories_);
   FreeListCategory* top = categories_[type];
@@ -3343,7 +3343,7 @@ void FreeList::RemoveCategory(FreeListCategory* category) {
   category->set_prev(nullptr);
 }
 
-void FreeList::PrintCategories(FreeListCategoryType type) {
+void FreeListLinkedList::PrintCategories(FreeListCategoryType type) {
   FreeListCategoryIterator it(this, type);
   PrintF("FreeList[%p, top=%p, %d] ", static_cast<void*>(this),
          static_cast<void*>(categories_[type]), type);
@@ -3379,7 +3379,7 @@ size_t FreeListCategory::SumFreeList() {
 }
 
 #ifdef DEBUG
-bool FreeList::IsVeryLong() {
+bool FreeListLinkedList::IsVeryLong() {
   int len = 0;
   for (int i = kFirstCategory; i < number_of_categories_; i++) {
     FreeListCategoryIterator it(this, static_cast<FreeListCategoryType>(i));
@@ -3395,7 +3395,7 @@ bool FreeList::IsVeryLong() {
 // This can take a very long time because it is linear in the number of entries
 // on the free list, so it should not be called if FreeListLength returns
 // kVeryLongFreeList.
-size_t FreeList::SumFreeLists() {
+size_t FreeListLinkedList::SumFreeLists() {
   size_t sum = 0;
   ForAllFreeListCategories(
       [&sum](FreeListCategory* category) { sum += category->SumFreeList(); });
