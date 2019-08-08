@@ -1893,6 +1893,47 @@ class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
   friend class heap::HeapTester;
 };
 
+// FreeList that only contains full pages;
+class FreeListFullPages final : public FreeList {
+ public:
+  FreeListFullPages() {
+    number_of_categories_ = 1;
+    last_category_ = 0;
+    min_block_size_ = kElementSize;
+    categories_ = new FreeListCategory*[number_of_categories_]();
+    Reset();
+  }
+
+  size_t GuaranteedAllocatable(size_t maximum_freed) final {
+    if (maximum_freed >= kElementSize) {
+      return maximum_freed;
+    } else {
+      return 0;
+    }
+  }
+
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size) final {
+    FreeSpace node;
+    node = TryFindNodeIn(0, size_in_bytes, node_size);
+    if (!node.is_null()) {
+      Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+    }
+    return node;
+  }
+
+  Page* GetPageForSize(size_t size_in_bytes) final {
+    return GetPageForCategoryType(0);
+  }
+
+ private:
+  static const size_t kElementSize = Page::kPageSize - Page::kHeaderSize;
+
+  FreeListCategoryType SelectFreeListCategoryType(size_t size_in_bytes) final {
+    return 0;
+  }
+};
+
 // Inspired by FreeListLegacy.
 // Only has 3 categories: Medium, Large and Huge.
 // Any block that would have belong to tiniest, tiny or small in FreeListLegacy

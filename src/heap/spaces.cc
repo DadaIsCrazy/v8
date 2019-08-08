@@ -3035,12 +3035,17 @@ void FreeListCategory::Relink() {
 // Generic FreeList methods (alloc/free related)
 
 FreeList* FreeList::CreateFreeList() {
-  if (FLAG_gc_freelist_strategy == 1) {
-    return new FreeListFastAlloc();
-  } else if (FLAG_gc_freelist_strategy == 2) {
-    return new FreeListMany();
-  } else {
-    return new FreeListLegacy();
+  switch (FLAG_gc_freelist_strategy) {
+    case 0:
+      return new FreeListLegacy();
+    case 1:
+      return new FreeListFastAlloc();
+    case 2:
+      return new FreeListMany();
+    case 3:
+      return new FreeListFullPages();
+    default:
+      FATAL("Invalid freelist strategy");
   }
 }
 
