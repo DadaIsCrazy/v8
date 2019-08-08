@@ -2282,7 +2282,7 @@ class V8_EXPORT_PRIVATE FreeListManyHalfFast : public FreeListManyFast {
 };
 
 // Uses FreeListMany if in the GC; FreeListManyVeryFast otherwise
-class V8_EXPORT_PRIVATE FreeListManyOrigin : public FreeListManyVeryFast {
+class V8_EXPORT_PRIVATE FreeListManyOrigin : public FreeListManyFast {
  public:
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                            size_t* node_size, AllocationOrigin origin) override;

@@ -1859,6 +1859,9 @@ void SpaceWithLinearArea::PrintAllocationsOrigins() {
       "Allocations Origins for %s: GeneratedCode:%zu - Runtime:%zu - GC:%zu\n",
       name(), allocations_origins_[0], allocations_origins_[1],
       allocations_origins_[2]);
+  allocations_origins_[0] = 0;
+  allocations_origins_[1] = 0;
+  allocations_origins_[2] = 0;
 }
 
 void PagedSpace::MarkLinearAllocationAreaBlack() {
@@ -3654,7 +3657,7 @@ FreeSpace FreeListManyOrigin::Allocate(size_t size_in_bytes, size_t* node_size, 
   if (origin == AllocationOrigin::kGC) {
     return FreeListMany::Allocate(size_in_bytes, node_size, origin);
   } else {
-    return FreeListManyVeryFast::Allocate(size_in_bytes, node_size, origin);
+    return FreeListManyFast::Allocate(size_in_bytes, node_size, origin);
   }
 }
 // ------------------------------------------------
