@@ -1733,6 +1733,7 @@ class AllocationStats {
   size_t Capacity() { return capacity_; }
   size_t MaxCapacity() { return max_capacity_; }
   size_t Size() { return size_; }
+  size_t Available() { return capacity_ - size_; }
 #ifdef DEBUG
   size_t AllocatedOnPage(Page* page) { return allocated_on_page_[page]; }
 #endif
@@ -2456,7 +2457,9 @@ class V8_EXPORT_PRIVATE PagedSpace
   // The bytes in the linear allocation area are not included in this total
   // because updating the stats would slow down allocation.  New pages are
   // immediately added to the free list so they show up here.
-  size_t Available() override { return free_list_->Available(); }
+  size_t Available() override {
+    return accounting_stats_.Available();
+  }
 
   // Allocated bytes in this space.  Garbage bytes that were not found due to
   // concurrent sweeping are counted as being allocated!  The bytes in the
