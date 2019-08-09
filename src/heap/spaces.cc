@@ -3026,6 +3026,7 @@ FreeList* FreeList::CreateFreeList() {
     case 10: return new FreeListLegacyMoreSmalls();
     case 11: return new FreeListManyVeryFast();
     case 12: return new FreeListManyOrigin();
+    case 13: return new FreeListFullPages();
     default: return new FreeListLegacy();
   }
 }

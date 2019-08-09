@@ -383,6 +383,7 @@ class FreeList {
   friend class ReadOnlyPage;
   friend class MapSpace;
   friend class Heap;
+  friend class CodeSpace;
 };
 
 // FreeList used for spaces that don't have freelists
@@ -1971,6 +1972,56 @@ class V8_EXPORT_PRIVATE FreeListLegacySlowPath : public FreeListLegacy {
                                            size_t* node_size, AllocationOrigin origin) override;
 };
 
+
+// FreeList that only contains full pages;
+class FreeListFullPages final : public FreeList {
+ public:
+  FreeListFullPages() {
+    number_of_categories_ = 1;
+    last_category_ = 0;
+    min_block_size_ = Page::kPageSize - Page::kHeaderSize;
+    categories_ = new FreeListCategory*[number_of_categories_]();
+    if (FLAG_gc_invert_freelist_sort) {
+      categories_end_ = new FreeListCategory*[number_of_categories_]();
+    }
+    Reset();
+  }
+  ~FreeListFullPages() {
+    delete[] categories_;
+    if (FLAG_gc_invert_freelist_sort) {
+      delete[] categories_end_;
+    }
+  }
+
+  size_t GuaranteedAllocatable(size_t maximum_freed) final {
+    if (maximum_freed >= min_block_size_) {
+      return maximum_freed;
+    } else {
+      return 0;
+    }
+  }
+
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size,
+                                           AllocationOrigin origin) final {
+    FreeSpace node;
+    node = TryFindNodeIn(0, size_in_bytes, node_size);
+    if (!node.is_null()) {
+      Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+    }
+    return node;
+  }
+
+  Page* GetPageForSize(size_t size_in_bytes) final {
+    return GetPageForCategoryType(0);
+  }
+
+ private:
+  FreeListCategoryType SelectFreeListCategoryType(size_t size_in_bytes) final {
+    return 0;
+  }
+};
+
 // Inspired by FreeListLegacy.
 // Only has 3 categories: Medium, Large and Huge.
 // Any block that would have belong to tiniest, tiny or small in FreeListLegacy
@@ -3236,7 +3287,11 @@ class CodeSpace : public PagedSpace {
   // Creates an old space object. The constructor does not allocate pages
   // from OS.
   explicit CodeSpace(Heap* heap)
-      : PagedSpace(heap, CODE_SPACE, EXECUTABLE, FreeList::CreateFreeList()) {}
+      : PagedSpace(heap, CODE_SPACE, EXECUTABLE, FreeList::CreateFreeList()) {
+    free_list_->min_block_size_ =
+        MemoryChunkLayout::AllocatableMemoryInMemoryChunk(CODE_SPACE);
+  }
+
 };
 
 // For contiguous spaces, top should be in the space (or at the end) and limit
