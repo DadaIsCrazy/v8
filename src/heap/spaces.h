@@ -372,6 +372,7 @@ class FreeList {
   friend class MemoryChunk;
   friend class ReadOnlyPage;
   friend class MapSpace;
+  friend class CodeSpace;
 };
 
 // FreeList used for spaces that don't have freelists
@@ -1899,13 +1900,13 @@ class FreeListFullPages final : public FreeList {
   FreeListFullPages() {
     number_of_categories_ = 1;
     last_category_ = 0;
-    min_block_size_ = kElementSize;
+    min_block_size_ = Page::kPageSize - Page::kHeaderSize;
     categories_ = new FreeListCategory*[number_of_categories_]();
     Reset();
   }
 
   size_t GuaranteedAllocatable(size_t maximum_freed) final {
-    if (maximum_freed >= kElementSize) {
+    if (maximum_freed >= min_block_size_) {
       return maximum_freed;
     } else {
       return 0;
@@ -1927,8 +1928,6 @@ class FreeListFullPages final : public FreeList {
   }
 
  private:
-  static const size_t kElementSize = Page::kPageSize - Page::kHeaderSize;
-
   FreeListCategoryType SelectFreeListCategoryType(size_t size_in_bytes) final {
     return 0;
   }
@@ -3025,7 +3024,10 @@ class CodeSpace : public PagedSpace {
   // Creates an old space object. The constructor does not allocate pages
   // from OS.
   explicit CodeSpace(Heap* heap)
-      : PagedSpace(heap, CODE_SPACE, EXECUTABLE, FreeList::CreateFreeList()) {}
+      : PagedSpace(heap, CODE_SPACE, EXECUTABLE, FreeList::CreateFreeList()) {
+    free_list_->min_block_size_ =
+        MemoryChunkLayout::AllocatableMemoryInMemoryChunk(CODE_SPACE);
+  }
 };
 
 // For contiguous spaces, top should be in the space (or at the end) and limit
