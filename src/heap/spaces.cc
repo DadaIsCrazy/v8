@@ -3027,7 +3027,7 @@ FreeList* FreeList::CreateFreeList() {
     case 11: return new FreeListManyVeryFast();
     case 12: return new FreeListManyOrigin();
     case 13: return new FreeListFullPages();
-    default: return new FreeListLegacy();
+    default: FATAL("Unknown freelist strategy");
   }
 }
 
@@ -3381,8 +3381,18 @@ FreeListMap::FreeListMap() {
   last_category_ = kOnlyCategory;
   min_block_size_ = kMinBlockSize;
   categories_ = new FreeListCategory*[number_of_categories_]();
+  if (FLAG_gc_invert_freelist_sort) {
+    categories_end_ = new FreeListCategory*[number_of_categories_]();
+  }
 
   Reset();
+}
+
+FreeListMap::~FreeListMap() {
+  delete[] categories_;
+  if (FLAG_gc_invert_freelist_sort) {
+    delete[] categories_end_;
+  }
 }
 
 size_t FreeListMap::GuaranteedAllocatable(size_t maximum_freed) {
@@ -3393,9 +3403,8 @@ Page* FreeListMap::GetPageForSize(size_t size_in_bytes) {
   return GetPageForCategoryType(kOnlyCategory);
 }
 
-FreeListMap::~FreeListMap() { delete[] categories_; }
-
-FreeSpace FreeListMap::Allocate(size_t size_in_bytes, size_t* node_size) {
+FreeSpace FreeListMap::Allocate(size_t size_in_bytes, size_t* node_size,
+                                AllocationOrigin origin) {
   DCHECK_GE(kMaxBlockSize, size_in_bytes);
 
   // The following DCHECK ensures that maps are allocated one by one (ie,

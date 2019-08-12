@@ -2206,7 +2206,8 @@ class V8_EXPORT_PRIVATE FreeListMap : public FreeList {
   ~FreeListMap();
 
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                           size_t* node_size) override;
+                                           size_t* node_size,
+                                           AllocationOrigin origin) override;
 
  private:
   static const size_t kMinBlockSize = Map::kSize;
