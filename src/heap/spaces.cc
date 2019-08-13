@@ -1893,10 +1893,6 @@ void PagedSpace::FreeLinearAllocationArea() {
     return;
   }
 
-  if (FLAG_trace_gc_linear_area_discarded) {
-    PrintIsolate(heap()->isolate(), "FreeLinearAllocationArea: %zu bytes remained.\n", current_limit - current_top);
-  }
-
   if (heap()->incremental_marking()->black_allocation()) {
     Page* page = Page::FromAllocationAreaAddress(current_top);
 
@@ -1983,6 +1979,10 @@ bool PagedSpace::RefillLinearAllocationAreaFromFreeList(size_t size_in_bytes, Al
 #endif
   // Don't free list allocate if there is linear space available.
   DCHECK_LT(static_cast<size_t>(limit() - top()), size_in_bytes);
+
+  if (FLAG_trace_gc_linear_area_discarded) {
+    PrintIsolate(heap()->isolate(), "FreeLinearAllocationArea: %zu bytes remained.\n", limit() - top());
+  }
 
   // Mark the old linear allocation area with a free space map so it can be
   // skipped when scanning the heap.  This also puts it back in the free list
@@ -3027,6 +3027,7 @@ FreeList* FreeList::CreateFreeList() {
     case 11: return new FreeListManyVeryFast();
     case 12: return new FreeListManyOrigin();
     case 13: return new FreeListFullPages();
+    case 14: return new FreeListManyFastFind();
     default: FATAL("Unknown freelist strategy");
   }
 }
@@ -3371,6 +3372,142 @@ FreeSpace FreeListMany::Allocate(size_t size_in_bytes, size_t* node_size, Alloca
   DCHECK(IsVeryLong() || Available() == SumFreeLists());
   return node;
 }
+
+
+// ------------------------------------------------
+// FreeListManyFastFind implementation
+FreeListManyFastFind::FreeListManyFastFind() {
+  for (int i = 0; i <= kCacheSize; i++) {
+    cache[i] = kCacheSize;
+  }
+}
+
+void FreeListManyFastFind::Reset() {
+  for (int i = 0; i <= kCacheSize; i++) {
+    cache[i] = kCacheSize;
+  }
+  FreeListMany::Reset();
+}
+
+bool FreeListManyFastFind::AddCategory(FreeListCategory* category) {
+  bool res = FreeList::AddCategory(category);
+
+  // Updating cache
+  if (!category->is_empty()) {
+    int type = category->type_;
+    for (int i = type; i >= 0 && cache[i] > type; i--) {
+      cache[i] = type;
+    }
+  }
+
+  // Checking cache
+  for (int i = 0; i <= last_category_; i++) {
+    DCHECK(cache[i] == last_category_+1 || categories_[cache[i]] != nullptr);
+    for (int j = i; j < cache[i]; j++) {
+      DCHECK(categories_[j] == nullptr);
+    }
+  }
+
+  return res;
+}
+
+void FreeListManyFastFind::RemoveCategory(FreeListCategory* category) {
+  FreeList::RemoveCategory(category);
+
+  // Updating cache
+  int type = category->type_;
+  if (categories_[type] == nullptr) {
+    for (int i = type; i >= 0 && cache[i] == type; i--) {
+      cache[i] = cache[type+1];
+    }
+  }
+
+  // Checking cache
+  for (int i = 0; i <= last_category_; i++) {
+    DCHECK(cache[i] == last_category_+1 || categories_[cache[i]] != nullptr);
+    for (int j = i; j < cache[i]; j++) {
+      DCHECK(categories_[j] == nullptr);
+    }
+  }
+}
+
+size_t FreeListManyFastFind::Free(Address start, size_t size_in_bytes, FreeMode mode) {
+  Page* page = Page::FromAddress(start);
+  page->DecreaseAllocatedBytes(size_in_bytes);
+
+  // Blocks have to be a minimum size to hold free list items.
+  if (size_in_bytes < min_block_size_) {
+    page->add_wasted_memory(size_in_bytes);
+    wasted_bytes_ += size_in_bytes;
+    return size_in_bytes;
+  }
+
+  // Insert other blocks at the head of a free list of the appropriate
+  // magnitude.
+  FreeListCategoryType type = SelectFreeListCategoryType(size_in_bytes);
+  page->free_list_category(type)->Free(start, size_in_bytes, mode);
+
+  // Updating cache
+  if (mode == kLinkCategory) {
+    for (int i = type; i >= 0 && cache[i] > type; i--) {
+      cache[i] = type;
+    }
+  }
+
+  // Checking cache
+  for (int i = 0; i <= last_category_; i++) {
+    DCHECK(cache[i] == last_category_+1 || categories_[cache[i]] != nullptr);
+    for (int j = i; j < cache[i]; j++) {
+      DCHECK(categories_[j] == nullptr);
+    }
+  }
+
+  DCHECK_EQ(page->AvailableInFreeList(),
+            page->AvailableInFreeListFromAllocatedBytes());
+  return 0;
+}
+
+FreeSpace FreeListManyFastFind::Allocate(size_t size_in_bytes, size_t* node_size, AllocationOrigin origin) {
+  USE(origin);
+  DCHECK_GE(kMaxBlockSize, size_in_bytes);
+  FreeSpace node;
+  FreeListCategoryType type = SelectFreeListCategoryType(size_in_bytes);
+  type = cache[type];
+  for (; type < last_category_; type = cache[type+1]) {
+    node = TryFindNodeIn(type, size_in_bytes, node_size);
+    if (!node.is_null()) break;
+  }
+
+  if (node.is_null()) {
+    // Searching each element of the last category.
+    type = last_category_;
+    node = SearchForNodeInList(type, size_in_bytes, node_size);
+  }
+
+  // Updating cache
+  if (!node.is_null() && categories_[type] == nullptr ) {
+    for (int i = type; i >= kFirstCategory && cache[i] == type; i--) {
+      cache[i] = cache[type+1];
+    }
+  }
+
+  // Checking cache
+  for (int i = 0; i <= last_category_; i++) {
+    DCHECK(cache[i] == last_category_+1 || categories_[cache[i]] != nullptr);
+    for (int j = i; j < cache[i]; j++) {
+      DCHECK(categories_[j] == nullptr);
+    }
+  }
+
+  if (!node.is_null()) {
+    Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+  }
+
+  DCHECK(IsVeryLong() || Available() == SumFreeLists());
+  return node;
+}
+
+
 
 // ------------------------------------------------
 // FreeListMap implementation

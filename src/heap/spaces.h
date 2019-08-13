@@ -224,6 +224,7 @@ class FreeListCategory {
   FreeListCategory* next_;
 
   friend class FreeList;
+  friend class FreeListManyFastFind;
   friend class PagedSpace;
   friend class MapSpace;
   friend class Heap;
@@ -315,8 +316,8 @@ class FreeList {
     }
   }
 
-  bool AddCategory(FreeListCategory* category);
-  V8_EXPORT_PRIVATE void RemoveCategory(FreeListCategory* category);
+  virtual bool AddCategory(FreeListCategory* category);
+  virtual V8_EXPORT_PRIVATE void RemoveCategory(FreeListCategory* category);
   void PrintCategories(FreeListCategoryType type);
 
  protected:
@@ -1945,7 +1946,11 @@ class V8_EXPORT_PRIVATE FreeListLegacyMoreSmalls : public FreeList {
 
   FreeListCategoryType SelectFreeListCategoryType(
       size_t size_in_bytes) override {
-    for (int i = 0; i < kNumberOfCategories; i++) {
+    if (size_in_bytes < 256) {
+      if (size_in_bytes <= 24) return 0;
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 3) - 3;
+    }
+    for (int i = 29; i < kNumberOfCategories; i++) {
       if (size_in_bytes <= categories_max[i]) {
         return i;
       }
@@ -2139,13 +2144,36 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
       if (size_in_bytes <= 24) return 0;
       return static_cast<FreeListCategoryType>(size_in_bytes >> 3) - 3;
     }
-    for (int cat = (256 >> 3) - 3; cat < last_category_; cat++) {
+    for (int cat = (256 >> 3) - 2; cat < last_category_; cat++) {
       if (size_in_bytes <= categories_max[cat]) {
         return cat;
       }
     }
     return last_category_;
   }
+};
+
+// Same as FreeListMany but uses a cache to know which categories are empty.
+class V8_EXPORT_PRIVATE FreeListManyFastFind : public FreeListMany {
+public:
+  FreeListManyFastFind();
+
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size, AllocationOrigin origin) override;
+
+  size_t Free(Address start, size_t size_in_bytes, FreeMode mode) override;
+
+  void Reset() override;
+
+  bool AddCategory(FreeListCategory* category) override;
+  V8_EXPORT_PRIVATE void RemoveCategory(FreeListCategory* category) override;
+
+protected:
+  static const int kCacheSize = kNumberOfCategories;
+  // Overallocating by one the cache so that the last element is always defined,
+  // and when updating the cache, we can always use cache[i+1] as long as i is <
+  // kCacheSize.
+  int cache[kCacheSize+1];
 };
 
 // Uses half less FreeList than FreeListMany. The idea being that iterating
