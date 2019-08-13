@@ -2129,7 +2129,6 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
   //   while ($cat[-1] <= 32768) {
   //     push @cat, $cat[-1]+$cat[-3], $cat[-1]*2
   //   }
-  //   @cat = sort { $a <=> $b } @cat;
   //   push @cat, "Page::kPageSize";
   //   say join ", ", @cat;
   //   say "\n", scalar @cat'
@@ -2137,8 +2136,7 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
   static const size_t categories_max[kNumberOfCategories];
 
   // Return the smallest category that could hold |size_in_bytes| bytes.
-
-  FreeListCategoryType SelectFreeListCategoryType(
+  virtual FreeListCategoryType SelectFreeListCategoryType(
       size_t size_in_bytes) override {
     if (size_in_bytes <= 256) {
       if (size_in_bytes <= 24) return 0;
@@ -2152,6 +2150,7 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
     return last_category_;
   }
 };
+
 
 // Same as FreeListMany but uses a cache to know which categories are empty.
 class V8_EXPORT_PRIVATE FreeListManyFastFind : public FreeListMany {
@@ -2174,6 +2173,43 @@ protected:
   // and when updating the cache, we can always use cache[i+1] as long as i is <
   // kCacheSize.
   int cache[kCacheSize+1];
+};
+
+
+// Same as FreeListMany but uses a lookup table to find out which category a
+// node belong to.
+template<class FreeListManySubclass>
+class V8_EXPORT_PRIVATE FreeListManyLookup : public FreeListManySubclass {
+ protected:
+    // Lookup values computed with:
+    // perl -E '@cat = map {$_*8} 3..32, 48, 64;
+    // while ($cat[-1] <= 32768) {
+    //   push @cat, $cat[-1]+$cat[-3], $cat[-1]*2
+    // }
+    // $c = 0;
+    // for ($i=0;$i<=$cat[-1];$i+=128){
+    //   $c++while$cat[$c]<=$i;
+    //   push@lim,$c;
+    // }
+    // say join ", ", @lim;
+    // say "\n", scalar @lim'
+    static const int lookup_indices[513];
+
+  // Return the smallest category that could hold |size_in_bytes| bytes.
+    FreeListCategoryType SelectFreeListCategoryType(
+      size_t size_in_bytes) override {
+    if (size_in_bytes <= 256) {
+      if (size_in_bytes <= 24) return 0;
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 3) - 3;
+    }
+    if (size_in_bytes <= FreeListManySubclass::categories_max[FreeListManySubclass::kNumberOfCategories-2]) {
+      DCHECK((size_in_bytes % 128 == 0) ||
+             (lookup_indices[size_in_bytes/128] ==
+              FreeListManySubclass::SelectFreeListCategoryType(size_in_bytes)));
+      return lookup_indices[size_in_bytes/128];
+    }
+    return FreeListManySubclass::last_category_;
+  }
 };
 
 // Uses half less FreeList than FreeListMany. The idea being that iterating
