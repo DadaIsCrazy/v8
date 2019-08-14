@@ -220,6 +220,7 @@ class FreeListCategory {
   FreeListCategory* next_;
 
   friend class FreeList;
+  friend class FreeListFullPages;
   friend class PagedSpace;
   friend class MapSpace;
 
@@ -250,6 +251,11 @@ class FreeList {
   // was too small. Bookkeeping information will be written to the block, i.e.,
   // its contents will be destroyed. The start address should be word aligned,
   // and the size should be a non-zero multiple of the word size.
+  virtual size_t Free(Address start, size_t size_in_bytes, FreeMode mode,
+                      AllocationOrigin origin) {
+    return Free(start, size_in_bytes, mode);
+  }
+
   virtual size_t Free(Address start, size_t size_in_bytes, FreeMode mode);
 
   // Allocates a free space node frome the free list of at least size_in_bytes
@@ -1923,6 +1929,28 @@ class FreeListFullPages final : public FreeList {
     return node;
   }
 
+  virtual size_t Free(Address start, size_t size_in_bytes, FreeMode mode,
+                      AllocationOrigin origin) {
+    Page* page = Page::FromAddress(start);
+    page->DecreaseAllocatedBytes(size_in_bytes);
+
+    if (origin == AllocationOrigin::kGC || size_in_bytes < 24) {
+      page->add_wasted_memory(size_in_bytes);
+      wasted_bytes_ += size_in_bytes;
+      return size_in_bytes;
+    }
+
+    if (categories_[0] != nullptr) {
+      EvictFreeListItems(Page::FromHeapObject(categories_[0]->top()));
+    }
+    DCHECK(categories_[0] == nullptr);
+
+    page->free_list_category(0)->Free(start, size_in_bytes, mode);
+    DCHECK_EQ(page->AvailableInFreeList(),
+              page->AvailableInFreeListFromAllocatedBytes());
+    return 0;
+  }
+
   Page* GetPageForSize(size_t size_in_bytes) final {
     return GetPageForCategoryType(0);
   }
@@ -2281,13 +2309,14 @@ class V8_EXPORT_PRIVATE PagedSpace
       int size_in_bytes, AllocationAlignment alignment,
       AllocationOrigin origin = AllocationOrigin::kRuntime);
 
-  size_t Free(Address start, size_t size_in_bytes, SpaceAccountingMode mode) {
+  size_t Free(Address start, size_t size_in_bytes, SpaceAccountingMode mode,
+              AllocationOrigin origin = AllocationOrigin::kRuntime) {
     if (size_in_bytes == 0) return 0;
     heap()->CreateFillerObjectAt(start, static_cast<int>(size_in_bytes));
     if (mode == SpaceAccountingMode::kSpaceAccounted) {
-      return AccountedFree(start, size_in_bytes);
+      return AccountedFree(start, size_in_bytes, origin);
     } else {
-      return UnaccountedFree(start, size_in_bytes);
+      return UnaccountedFree(start, size_in_bytes, origin);
     }
   }
 
@@ -2295,16 +2324,18 @@ class V8_EXPORT_PRIVATE PagedSpace
   // the free list or accounted as waste.
   // If add_to_freelist is false then just accounting stats are updated and
   // no attempt to add area to free list is made.
-  size_t AccountedFree(Address start, size_t size_in_bytes) {
-    size_t wasted = free_list_->Free(start, size_in_bytes, kLinkCategory);
+  size_t AccountedFree(Address start, size_t size_in_bytes,
+                       AllocationOrigin origin = AllocationOrigin::kRuntime) {
+    size_t wasted = free_list_->Free(start, size_in_bytes, kLinkCategory, origin);
     Page* page = Page::FromAddress(start);
     accounting_stats_.DecreaseAllocatedBytes(size_in_bytes, page);
     DCHECK_GE(size_in_bytes, wasted);
     return size_in_bytes - wasted;
   }
 
-  size_t UnaccountedFree(Address start, size_t size_in_bytes) {
-    size_t wasted = free_list_->Free(start, size_in_bytes, kDoNotLinkCategory);
+  size_t UnaccountedFree(Address start, size_t size_in_bytes,
+                         AllocationOrigin origin = AllocationOrigin::kRuntime) {
+    size_t wasted = free_list_->Free(start, size_in_bytes, kDoNotLinkCategory,origin);
     DCHECK_GE(size_in_bytes, wasted);
     return size_in_bytes - wasted;
   }
