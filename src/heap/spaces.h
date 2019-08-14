@@ -220,7 +220,7 @@ class FreeListCategory {
   FreeListCategory* next_;
 
   friend class FreeList;
-  friend class FreeListFullPages;
+  friend class FreeListSingleElem;
   friend class PagedSpace;
   friend class MapSpace;
 
@@ -1900,10 +1900,11 @@ class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
   friend class heap::HeapTester;
 };
 
-// FreeList that only contains full pages;
-class FreeListFullPages final : public FreeList {
+// A FreeList that contains a single elements. It simulates an allocator that
+// would only use bump-pointer allocations.
+class FreeListSingleElem final : public FreeList {
  public:
-  FreeListFullPages() {
+  FreeListSingleElem() {
     number_of_categories_ = 1;
     last_category_ = 0;
     min_block_size_ = Page::kPageSize - Page::kHeaderSize;

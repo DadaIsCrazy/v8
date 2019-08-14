@@ -3043,7 +3043,7 @@ FreeList* FreeList::CreateFreeList() {
     case 2:
       return new FreeListMany();
     case 3:
-      return new FreeListFullPages();
+      return new FreeListSingleElem();
     default:
       FATAL("Invalid freelist strategy");
   }
