@@ -3030,6 +3030,8 @@ FreeList* FreeList::CreateFreeList() {
     case 14: return new FreeListManyFastFind();
     case 15: return new FreeListManyLookup<FreeListMany>();
     case 16: return new FreeListManyLookup<FreeListManyFastFind>();
+    case 17: return new FreeListManyPreciseGetPage<FreeListMany>();
+    case 18: return new FreeListManyPreciseGetPage<FreeListManyOrigin>();
     default: FATAL("Unknown freelist strategy");
   }
 }
@@ -3816,6 +3818,7 @@ FreeSpace FreeListManyOrigin::Allocate(size_t size_in_bytes, size_t* node_size, 
     return FreeListManyFast::Allocate(size_in_bytes, node_size, origin);
   }
 }
+
 // ------------------------------------------------
 // FreeListManyFastMoving implementation
 

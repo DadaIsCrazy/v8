@@ -2203,6 +2203,23 @@ protected:
   int cache[kCacheSize+1];
 };
 
+// Like FreeListMany, but GetPageForSize is more precise.
+template <class FreeListBase>
+class V8_EXPORT_PRIVATE FreeListManyPreciseGetPage : public FreeListBase {
+public:
+  Page* GetPageForSize(size_t size_in_bytes) override {
+    FreeListCategoryType minimum_category = FreeListBase::SelectFreeListCategoryType(size_in_bytes);
+    Page* page = nullptr;
+    for (int cat = minimum_category+1; !page && cat <= FreeListBase::last_category_; cat++) {
+      page = FreeListBase::GetPageForCategoryType(cat);
+    }
+    if (!page) {
+      // Might return a page in which |size_in_bytes| will not fit.
+      page = FreeListBase::GetPageForCategoryType(minimum_category);
+    }
+    return page;
+  }
+};
 
 // Same as FreeListMany but uses a lookup table to find out which category a
 // node belong to.
