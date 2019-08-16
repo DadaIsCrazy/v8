@@ -4087,7 +4087,10 @@ bool CompactionSpace::SweepAndRetryAllocation(int size_in_bytes, AllocationOrigi
 bool PagedSpace::SlowRefillLinearAllocationArea(int size_in_bytes, AllocationOrigin origin) {
   VMState<GC> state(heap()->isolate());
   RuntimeCallTimerScope runtime_timer(
-      heap()->isolate(), RuntimeCallCounterId::kGC_Custom_SlowAllocateRaw);
+      heap()->isolate(),
+      origin == AllocationOrigin::kGeneratedCode ? RuntimeCallCounterId::kGC_Custom_SlowAllocateRaw_Generated :
+      origin == AllocationOrigin::kRuntime       ? RuntimeCallCounterId::kGC_Custom_SlowAllocateRaw_Runtime   :
+      RuntimeCallCounterId::kGC_Custom_SlowAllocateRaw_GC);
   return RawSlowRefillLinearAllocationArea(size_in_bytes, origin);
 }
 
