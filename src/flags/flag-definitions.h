@@ -956,6 +956,8 @@ DEFINE_BOOL(gc_experiment_less_compaction, false,
             "less compaction in non-memory reducing mode")
 DEFINE_BOOL(gc_invert_freelist_sort, false,
             "sort pages in the freelist from most bytes used to least")
+DEFINE_BOOL(reduce_memory,false,
+           "use memory-reducing heuristics")
 
 DEFINE_BOOL(disable_abortjs, false, "disables AbortJS runtime function")
 

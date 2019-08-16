@@ -608,7 +608,7 @@ void MarkCompactCollector::ComputeEvacuationHeuristics(
   // exist enough compaction speed samples.
   const float kTargetMsPerArea = .5;
 
-  if (heap()->ShouldReduceMemory()) {
+  if (heap()->ShouldReduceMemory() || (FLAG_reduce_memory)) {
     *target_fragmentation_percent = kTargetFragmentationPercentForReduceMemory;
     *max_evacuated_bytes = kMaxEvacuatedBytesForReduceMemory;
   } else if (heap()->ShouldOptimizeForMemoryUsage()) {
