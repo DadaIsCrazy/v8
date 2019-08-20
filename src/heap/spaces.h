@@ -2039,7 +2039,7 @@ class V8_EXPORT_PRIVATE FreeListManyCached : public FreeListMany {
   void Reset() override;
 
   bool AddCategory(FreeListCategory* category) override;
-  V8_EXPORT_PRIVATE void RemoveCategory(FreeListCategory* category) override;
+  void RemoveCategory(FreeListCategory* category) override;
 
  protected:
   static const int kCacheSize = kNumberOfCategories;
