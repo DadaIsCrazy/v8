@@ -2238,6 +2238,65 @@ protected:
   }
 };
 
+// Same as FreeListManyFastFind but uses a fast path. The fast path starts at `size_in_bytes+1.85k`
+class V8_EXPORT_PRIVATE FreeListManyFastFindFastPathFaster1 : public FreeListManyFastFind {
+public:
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size, AllocationOrigin origin) override;
+protected:
+  // Objects in the 36th category are at least 2056 bytes
+  static const FreeListCategoryType kFastPathFirstCategory = 36;
+  static const size_t kFastPathStart = 2056;
+  static const size_t kTinyObjectMaxSize = 128;
+  static const size_t kFastPathOffset = kFastPathStart - kTinyObjectMaxSize;
+  // Objects in the 30th category are at least 256 bytes
+  static const FreeListCategoryType kFastPathFallBackTiny = 30;
+
+  FreeListCategoryType SelectFastAllocationFreeListCategoryType(
+      size_t size_in_bytes) {
+    DCHECK(size_in_bytes < categories_max[last_category_]);
+
+    if (size_in_bytes >= 65536) return last_category_;
+
+    size_in_bytes += kFastPathOffset;
+    for (int cat = kFastPathFirstCategory; cat < last_category_; cat++) {
+      if (size_in_bytes <= categories_max[cat - 1]) {
+        return cat;
+      }
+    }
+    return last_category_;
+  }
+};
+
+// Same as FreeListManyFastFind but uses a fast path. The fast path starts at `min(2k,size_in_bytes*2)`
+class V8_EXPORT_PRIVATE FreeListManyFastFindFastPathFaster2 : public FreeListManyFastFind {
+public:
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size, AllocationOrigin origin) override;
+protected:
+  // Objects in the 36th category are at least 2056 bytes
+  static const FreeListCategoryType kFastPathFirstCategory = 36;
+  static const size_t kFastPathStart = 2056;
+  static const size_t kTinyObjectMaxSize = 128;
+  static const size_t kFastPathOffset = kFastPathStart - kTinyObjectMaxSize;
+  // Objects in the 30th category are at least 256 bytes
+  static const FreeListCategoryType kFastPathFallBackTiny = 30;
+
+  FreeListCategoryType SelectFastAllocationFreeListCategoryType(
+      size_t size_in_bytes) {
+    DCHECK(size_in_bytes < categories_max[last_category_]);
+
+    if (size_in_bytes >= 65536) return last_category_;
+
+    size_in_bytes = size_in_bytes < kFastPathStart/2 ? kFastPathStart : size_in_bytes*2;
+    for (int cat = kFastPathFirstCategory; cat < last_category_; cat++) {
+      if (size_in_bytes <= categories_max[cat - 1]) {
+        return cat;
+      }
+    }
+    return last_category_;
+  }
+};
 
 // Like FreeListMany, but GetPageForSize is more precise.
 template <class FreeListBase>
@@ -2488,6 +2547,13 @@ class V8_EXPORT_PRIVATE FreeListManyOrigin : public FreeListManyFast {
 
 // Uses FreeListMany if in the GC; FreeListManyVeryFast otherwise
 class V8_EXPORT_PRIVATE FreeListManyOriginFastFind : public FreeListManyFastFindFastPath {
+ public:
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size, AllocationOrigin origin) override;
+};
+
+// Uses FreeListMany if in the GC; FreeListManyVeryFast otherwise
+class V8_EXPORT_PRIVATE FreeListManyOriginFastFindFaster1 : public FreeListManyFastFindFastPathFaster1 {
  public:
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                            size_t* node_size, AllocationOrigin origin) override;
