@@ -224,6 +224,7 @@ class FreeListCategory {
   FreeListCategory* next_;
 
   friend class FreeList;
+  friend class FreeListManyCached;
   friend class PagedSpace;
   friend class MapSpace;
 
@@ -261,12 +262,13 @@ class FreeList {
   // size_in_bytes. This method returns null if the allocation request cannot be
   // handled by the free list.
   virtual V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                                   size_t* node_size) = 0;
+                                                   size_t* node_size,
+                                                   AllocationOrigin origin) = 0;
 
   // Returns a page containing an entry for a given type, or nullptr otherwise.
   V8_EXPORT_PRIVATE virtual Page* GetPageForSize(size_t size_in_bytes) = 0;
 
-  void Reset();
+  virtual void Reset();
 
   // Return the number of bytes available on the free list.
   size_t Available() {
@@ -314,8 +316,8 @@ class FreeList {
     }
   }
 
-  bool AddCategory(FreeListCategory* category);
-  V8_EXPORT_PRIVATE void RemoveCategory(FreeListCategory* category);
+  virtual bool AddCategory(FreeListCategory* category);
+  virtual V8_EXPORT_PRIVATE void RemoveCategory(FreeListCategory* category);
   void PrintCategories(FreeListCategoryType type);
 
  protected:
@@ -393,7 +395,8 @@ class NoFreeList final : public FreeList {
     FATAL("NoFreeList can't be used as a standard FreeList.");
   }
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                           size_t* node_size) final {
+                                           size_t* node_size,
+                                           AllocationOrigin origin) final {
     FATAL("NoFreeList can't be used as a standard FreeList.");
   }
   Page* GetPageForSize(size_t size_in_bytes) final {
@@ -1837,7 +1840,8 @@ class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
   ~FreeListLegacy();
 
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                           size_t* node_size) override;
+                                           size_t* node_size,
+                                           AllocationOrigin origin) override;
 
  private:
   enum { kTiniest, kTiny, kSmall, kMedium, kLarge, kHuge };
@@ -1929,7 +1933,8 @@ class V8_EXPORT_PRIVATE FreeListFastAlloc : public FreeList {
   ~FreeListFastAlloc();
 
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                           size_t* node_size) override;
+                                           size_t* node_size,
+                                           AllocationOrigin origin) override;
 
  private:
   enum { kMedium, kLarge, kHuge };
@@ -1962,7 +1967,7 @@ class V8_EXPORT_PRIVATE FreeListFastAlloc : public FreeList {
   }
 };
 
-// Use 49 Freelists: on per size between 24 and 256, and then a few ones for
+// Use 47 Freelists: on per size between 24 and 256, and then a few ones for
 // larger sizes. See the variable |categories_max| for the size of each
 // Freelist.  Allocation is done using a best-fit strategy (considering only the
 // first element of each category though).
@@ -1978,9 +1983,10 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
   ~FreeListMany();
 
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                           size_t* node_size) override;
+                                           size_t* node_size,
+                                           AllocationOrigin origin) override;
 
- private:
+ protected:
   static const size_t kMinBlockSize = 3 * kTaggedSize;
 
   // This is a conservative upper bound. The actual maximum block size takes
@@ -1993,26 +1999,117 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
   //   while ($cat[-1] <= 32768) {
   //     push @cat, $cat[-1]+$cat[-3], $cat[-1]*2
   //   }
-  //   push @cat, 4080, 4088;
-  //   @cat = sort { $a <=> $b } @cat;
   //   push @cat, "Page::kPageSize";
   //   say join ", ", @cat;
   //   say "\n", scalar @cat'
-  // Note the special case for 4080 and 4088 bytes: experiments have shown that
-  // this category classes are more used than others of similar sizes
-  static const int kNumberOfCategories = 49;
+  static const int kNumberOfCategories = 47;
   static const size_t categories_max[kNumberOfCategories];
 
   // Return the smallest category that could hold |size_in_bytes| bytes.
   FreeListCategoryType SelectFreeListCategoryType(
       size_t size_in_bytes) override {
-    for (int cat = kFirstCategory; cat < last_category_; cat++) {
+    if (size_in_bytes <= 256) {
+      if (size_in_bytes <= 24) return 0;
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 3) - 3;
+    }
+    for (int cat = (256 >> 3) - 2; cat < last_category_; cat++) {
       if (size_in_bytes <= categories_max[cat]) {
         return cat;
       }
     }
     return last_category_;
   }
+};
+
+// Same as FreeListMany but uses a cache to know which categories are empty.
+// The cache is maintained in a way such that for all category c, cache[c]
+// contains the first non-empty category greater or equal to c, that may hold an
+// object of size c.
+// Allocation is done using the same strategy as FreeListMany (ie, best fit).
+class V8_EXPORT_PRIVATE FreeListManyCached : public FreeListMany {
+ public:
+  FreeListManyCached();
+
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size,
+                                           AllocationOrigin origin) override;
+
+  size_t Free(Address start, size_t size_in_bytes, FreeMode mode) override;
+
+  void Reset() override;
+
+  bool AddCategory(FreeListCategory* category) override;
+  V8_EXPORT_PRIVATE void RemoveCategory(FreeListCategory* category) override;
+
+ protected:
+  static const int kCacheSize = kNumberOfCategories;
+  // The cache is overallocated by one so that the last element is always
+  // defined, and when updating the cache, we can always use cache[i+1] as long
+  // as i is < kCacheSize.
+  int cache[kCacheSize + 1];
+};
+
+// Same as FreeListManyFastFind but uses a fast path.
+// The fast path overallocates at least 1.85k bytes. The idea of this 1.5k is:
+// we want the fast path to always overallocate, even for larger
+// categories. Therefore, we have two choices: either overallocate by
+// "size_in_bytes * something" or overallocate by "size_in_bytes +
+// something". We choose the later, as the former will tend to overallocate too
+// much for larger objects. The 1.85k (= 2048 - 128) has been chosen such that
+// for tiny objects (size <= 128 bytes), the first category considered is the
+// 36th (which holds objects of 2k to 3k), while for larger objects, the first
+// category considered will be one that guarantees a 1.85k+ bytes
+// overallocation. Using 2k rather than 1.85k would have resulted in either a
+// more complex logic for SelectFastAllocationFreeListCategoryType, or the 36th
+// category (2k to 3k) not being used; both of which are undesirable.
+// A secondary fast path is used for tiny objects (size <= 128), in order to
+// consider categories from 256 to 2048 bytes for them.
+class V8_EXPORT_PRIVATE FreeListManyCachedFastPath : public FreeListManyCached {
+ public:
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size,
+                                           AllocationOrigin origin) override;
+
+ protected:
+  // Objects in the 36th category are at least 2056 bytes
+  static const FreeListCategoryType kFastPathFirstCategory = 36;
+  static const size_t kFastPathStart = 2056;
+  static const size_t kTinyObjectMaxSize = 128;
+  static const size_t kFastPathOffset = kFastPathStart - kTinyObjectMaxSize;
+  // Objects in the 30th category are at least 256 bytes
+  static const FreeListCategoryType kFastPathFallBackTiny = 30;
+
+  FreeListCategoryType SelectFastAllocationFreeListCategoryType(
+      size_t size_in_bytes) {
+    DCHECK(size_in_bytes < categories_max[last_category_]);
+
+    if (size_in_bytes >= 65536) return last_category_;
+
+    size_in_bytes += kFastPathOffset;
+    for (int cat = kFastPathFirstCategory; cat < last_category_; cat++) {
+      if (size_in_bytes <= categories_max[cat - 1]) {
+        return cat;
+      }
+    }
+    return last_category_;
+  }
+};
+
+// Uses FreeListManyCached if in the GC; FreeListManyCachedFastPath otherwise.
+
+// The reasonning behind this FreeList is the following: the GC runs in
+// parallel, and therefore, more expensive allocations there are less
+// noticeable. On the other hand, the generated code and runtime need to be very
+// fast. Therefore, the strategy for the former is one that is not very
+// efficient, but reduces fragmentation (FreeListManyCached), while the strategy
+// for the later is one that is very efficient, but introduces some
+// fragmentation (FreeListManyCachedFastPath).
+class V8_EXPORT_PRIVATE FreeListManyCachedOrigin
+    : public FreeListManyCachedFastPath {
+ public:
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size,
+                                           AllocationOrigin origin) override;
 };
 
 // FreeList for maps: since maps are all the same size, uses a single freelist.
@@ -2026,7 +2123,8 @@ class V8_EXPORT_PRIVATE FreeListMap : public FreeList {
   ~FreeListMap();
 
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                           size_t* node_size) override;
+                                           size_t* node_size,
+                                           AllocationOrigin origin) override;
 
  private:
   static const size_t kMinBlockSize = Map::kSize;
@@ -2411,7 +2509,8 @@ class V8_EXPORT_PRIVATE PagedSpace
   // Sets up a linear allocation area that fits the given number of bytes.
   // Returns false if there is not enough space and the caller has to retry
   // after collecting garbage.
-  inline bool EnsureLinearAllocationArea(int size_in_bytes);
+  inline bool EnsureLinearAllocationArea(int size_in_bytes,
+                                         AllocationOrigin origin);
   // Allocates an object from the linear allocation area. Assumes that the
   // linear allocation area is large enought to fit the object.
   inline HeapObject AllocateLinearly(int size_in_bytes);
@@ -2423,24 +2522,25 @@ class V8_EXPORT_PRIVATE PagedSpace
                                                AllocationAlignment alignment);
 
   V8_WARN_UNUSED_RESULT bool RefillLinearAllocationAreaFromFreeList(
-      size_t size_in_bytes);
+      size_t size_in_bytes, AllocationOrigin origin);
 
   // If sweeping is still in progress try to sweep unswept pages. If that is
   // not successful, wait for the sweeper threads and retry free-list
   // allocation. Returns false if there is not enough space and the caller
   // has to retry after collecting garbage.
-  V8_WARN_UNUSED_RESULT virtual bool SweepAndRetryAllocation(int size_in_bytes);
+  V8_WARN_UNUSED_RESULT virtual bool SweepAndRetryAllocation(
+      int size_in_bytes, AllocationOrigin origin);
 
   // Slow path of AllocateRaw. This function is space-dependent. Returns false
   // if there is not enough space and the caller has to retry after
   // collecting garbage.
   V8_WARN_UNUSED_RESULT virtual bool SlowRefillLinearAllocationArea(
-      int size_in_bytes);
+      int size_in_bytes, AllocationOrigin origin);
 
   // Implementation of SlowAllocateRaw. Returns false if there is not enough
   // space and the caller has to retry after collecting garbage.
   V8_WARN_UNUSED_RESULT bool RawSlowRefillLinearAllocationArea(
-      int size_in_bytes);
+      int size_in_bytes, AllocationOrigin origin);
 
   Executability executable_;
 
@@ -2929,10 +3029,10 @@ class V8_EXPORT_PRIVATE CompactionSpace : public PagedSpace {
   bool snapshotable() override { return false; }
 
   V8_WARN_UNUSED_RESULT bool SweepAndRetryAllocation(
-      int size_in_bytes) override;
+      int size_in_bytes, AllocationOrigin origin) override;
 
   V8_WARN_UNUSED_RESULT bool SlowRefillLinearAllocationArea(
-      int size_in_bytes) override;
+      int size_in_bytes, AllocationOrigin origin) override;
 };
 
 // A collection of |CompactionSpace|s used by a single compaction task.
