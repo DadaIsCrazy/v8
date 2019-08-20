@@ -3953,6 +3953,9 @@ bool FreeList::AddCategory(FreeListCategory* category) {
     category->set_next(top);
     categories_[type] = category;
   }
+
+  IncreaseAvailableBytes(category->available());
+
   return true;
 }
 
