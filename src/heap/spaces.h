@@ -2012,7 +2012,7 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
   FreeListCategoryType SelectFreeListCategoryType(
       size_t size_in_bytes) override {
     if (size_in_bytes <= kPreciseCategoryMaxSize) {
-      if (size_in_bytes <= kMinBlockSize) return 0;
+      if (size_in_bytes <= categories_max[0]) return 0;
       return static_cast<FreeListCategoryType>(size_in_bytes >> 3) - 3;
     }
     for (int cat = (256 >> 3) - 2; cat < last_category_; cat++) {
