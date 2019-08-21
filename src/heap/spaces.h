@@ -1992,6 +1992,9 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
   // This is a conservative upper bound. The actual maximum block size takes
   // padding and alignment of data and code pages into account.
   static const size_t kMaxBlockSize = Page::kPageSize;
+  // Largest size for which categories are still precise, and for which we can
+  // therefore compute the category in constant time.
+  static const size_t kPreciseCategoryMaxSize = 256;
 
   // Categories boundaries generated with:
   // perl -E '
@@ -2008,8 +2011,8 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
   // Return the smallest category that could hold |size_in_bytes| bytes.
   FreeListCategoryType SelectFreeListCategoryType(
       size_t size_in_bytes) override {
-    if (size_in_bytes <= 256) {
-      if (size_in_bytes <= 24) return 0;
+    if (size_in_bytes <= kPreciseCategoryMaxSize) {
+      if (size_in_bytes <= kMinBlockSize) return 0;
       return static_cast<FreeListCategoryType>(size_in_bytes >> 3) - 3;
     }
     for (int cat = (256 >> 3) - 2; cat < last_category_; cat++) {
@@ -2022,9 +2025,9 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
 };
 
 // Same as FreeListMany but uses a cache to know which categories are empty.
-// The cache is maintained in a way such that for all category c, cache[c]
-// contains the first non-empty category greater or equal to c, that may hold an
-// object of size c.
+// The cache (|next_nonempty_category|) is maintained in a way such that for
+// each category c, next_nonempty_category[c] contains the first non-empty
+// category greater or equal to c, that may hold an object of size c.
 // Allocation is done using the same strategy as FreeListMany (ie, best fit).
 class V8_EXPORT_PRIVATE FreeListManyCached : public FreeListMany {
  public:
@@ -2042,16 +2045,54 @@ class V8_EXPORT_PRIVATE FreeListManyCached : public FreeListMany {
   void RemoveCategory(FreeListCategory* category) override;
 
  protected:
-  static const int kCacheSize = kNumberOfCategories;
+  // Updates the cache after adding something in the category |cat|.
+  void UpdateCacheAfterUnemptying(FreeListCategoryType cat) {
+    for (int i = cat; i >= kFirstCategory && next_nonempty_category[i] > cat;
+         i--) {
+      next_nonempty_category[i] = cat;
+    }
+  }
+
+  // Updates the cache after emptying category |cat|.
+  void UpdateCacheAfterEmptying(FreeListCategoryType cat) {
+    for (int i = cat; i >= kFirstCategory && next_nonempty_category[i] == cat;
+         i--) {
+      next_nonempty_category[i] = next_nonempty_category[cat + 1];
+    }
+  }
+
+#ifdef DEBUG
+  // Checking cache
+  void CheckCacheIntegrity() {
+    for (int i = 0; i <= last_category_; i++) {
+      DCHECK(next_nonempty_category[i] == last_category_ + 1 ||
+             categories_[next_nonempty_category[i]] != nullptr);
+      for (int j = i; j < next_nonempty_category[i]; j++) {
+        DCHECK(categories_[j] == nullptr);
+      }
+    }
+  }
+#endif
+
   // The cache is overallocated by one so that the last element is always
   // defined, and when updating the cache, we can always use cache[i+1] as long
   // as i is < kCacheSize.
-  int cache[kCacheSize + 1];
+  int next_nonempty_category[kNumberOfCategories + 1];
+
+ private:
+  void ResetCache() {
+    for (int i = 0; i < kNumberOfCategories; i++) {
+      next_nonempty_category[i] = kNumberOfCategories;
+    }
+    // Setting the after-last element as well, as explained in the class
+    // declaration.
+    next_nonempty_category[kNumberOfCategories] = kNumberOfCategories;
+  }
 };
 
-// Same as FreeListManyFastFind but uses a fast path.
-// The fast path overallocates at least 1.85k bytes. The idea of this 1.5k is:
-// we want the fast path to always overallocate, even for larger
+// Same as FreeListManyCached but uses a fast path.
+// The fast path overallocates by at least 1.85k bytes. The idea of this 1.85k
+// is: we want the fast path to always overallocate, even for larger
 // categories. Therefore, we have two choices: either overallocate by
 // "size_in_bytes * something" or overallocate by "size_in_bytes +
 // something". We choose the later, as the former will tend to overallocate too
@@ -2081,9 +2122,10 @@ class V8_EXPORT_PRIVATE FreeListManyCachedFastPath : public FreeListManyCached {
 
   FreeListCategoryType SelectFastAllocationFreeListCategoryType(
       size_t size_in_bytes) {
-    DCHECK(size_in_bytes < categories_max[last_category_]);
+    DCHECK(size_in_bytes < kMaxBlockSize);
 
-    if (size_in_bytes >= 65536) return last_category_;
+    if (size_in_bytes >= categories_max[last_category_ - 1])
+      return last_category_;
 
     size_in_bytes += kFastPathOffset;
     for (int cat = kFastPathFirstCategory; cat < last_category_; cat++) {

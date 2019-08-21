@@ -3290,21 +3290,10 @@ FreeSpace FreeListMany::Allocate(size_t size_in_bytes, size_t* node_size,
 // ------------------------------------------------
 // FreeListManyCached implementation
 
-FreeListManyCached::FreeListManyCached() {
-  for (int i = 0; i < kCacheSize; i++) {
-    cache[i] = kCacheSize;
-  }
-  // Setting the after-last element as well, as explained in the class
-  // declaration.
-  cache[kCacheSize] = kCacheSize;
-}
+FreeListManyCached::FreeListManyCached() { ResetCache(); }
 
 void FreeListManyCached::Reset() {
-  for (int i = 0; i < kCacheSize; i++) {
-    cache[i] = kCacheSize;
-  }
-  // Note that there is no need to reset the last element of the cache, since
-  // its value is never updated.
+  ResetCache();
   FreeListMany::Reset();
 }
 
@@ -3313,20 +3302,11 @@ bool FreeListManyCached::AddCategory(FreeListCategory* category) {
 
   // Updating cache
   if (was_added) {
-    int type = category->type_;
-    for (int i = type; i >= 0 && cache[i] > type; i--) {
-      cache[i] = type;
-    }
+    UpdateCacheAfterUnemptying(category->type_);
   }
 
 #ifdef DEBUG
-  // Checking cache
-  for (int i = 0; i <= last_category_; i++) {
-    DCHECK(cache[i] == last_category_ + 1 || categories_[cache[i]] != nullptr);
-    for (int j = i; j < cache[i]; j++) {
-      DCHECK(categories_[j] == nullptr);
-    }
-  }
+  CheckCacheIntegrity();
 #endif
 
   return was_added;
@@ -3338,19 +3318,11 @@ void FreeListManyCached::RemoveCategory(FreeListCategory* category) {
   // Updating cache
   int type = category->type_;
   if (categories_[type] == nullptr) {
-    for (int i = type; i >= 0 && cache[i] == type; i--) {
-      cache[i] = cache[type + 1];
-    }
+    UpdateCacheAfterEmptying(type);
   }
 
 #ifdef DEBUG
-  // Checking cache
-  for (int i = 0; i <= last_category_; i++) {
-    DCHECK(cache[i] == last_category_ + 1 || categories_[cache[i]] != nullptr);
-    for (int j = i; j < cache[i]; j++) {
-      DCHECK(categories_[j] == nullptr);
-    }
-  }
+  CheckCacheIntegrity();
 #endif
 }
 
@@ -3373,19 +3345,10 @@ size_t FreeListManyCached::Free(Address start, size_t size_in_bytes,
 
   // Updating cache
   if (mode == kLinkCategory) {
-    for (int i = type; i >= 0 && cache[i] > type; i--) {
-      cache[i] = type;
-    }
+    UpdateCacheAfterUnemptying(type);
 
 #ifdef DEBUG
-    // Checking cache
-    for (int i = 0; i <= last_category_; i++) {
-      DCHECK(cache[i] == last_category_ + 1 ||
-             categories_[cache[i]] != nullptr);
-      for (int j = i; j < cache[i]; j++) {
-        DCHECK(categories_[j] == nullptr);
-      }
-    }
+    CheckCacheIntegrity();
 #endif
   }
 
@@ -3401,8 +3364,8 @@ FreeSpace FreeListManyCached::Allocate(size_t size_in_bytes, size_t* node_size,
 
   FreeSpace node;
   FreeListCategoryType type = SelectFreeListCategoryType(size_in_bytes);
-  type = cache[type];
-  for (; type < last_category_; type = cache[type + 1]) {
+  type = next_nonempty_category[type];
+  for (; type < last_category_; type = next_nonempty_category[type + 1]) {
     node = TryFindNodeIn(type, size_in_bytes, node_size);
     if (!node.is_null()) break;
   }
@@ -3415,19 +3378,11 @@ FreeSpace FreeListManyCached::Allocate(size_t size_in_bytes, size_t* node_size,
 
   // Updating cache
   if (!node.is_null() && categories_[type] == nullptr) {
-    for (int i = type; i >= kFirstCategory && cache[i] == type; i--) {
-      cache[i] = cache[type + 1];
-    }
+    UpdateCacheAfterEmptying(type);
   }
 
 #ifdef DEBUG
-  // Checking cache
-  for (int i = 0; i <= last_category_; i++) {
-    DCHECK(cache[i] == last_category_ + 1 || categories_[cache[i]] != nullptr);
-    for (int j = i; j < cache[i]; j++) {
-      DCHECK(categories_[j] == nullptr);
-    }
-  }
+  CheckCacheIntegrity();
 #endif
 
   if (!node.is_null()) {
@@ -3452,7 +3407,8 @@ FreeSpace FreeListManyCachedFastPath::Allocate(size_t size_in_bytes,
   FreeListCategoryType first_category =
       SelectFastAllocationFreeListCategoryType(size_in_bytes);
   FreeListCategoryType type = first_category;
-  for (type = cache[type]; type <= last_category_; type = cache[type + 1]) {
+  for (type = next_nonempty_category[type]; type <= last_category_;
+       type = next_nonempty_category[type + 1]) {
     node = TryFindNodeIn(type, size_in_bytes, node_size);
     if (!node.is_null()) break;
   }
@@ -3460,8 +3416,9 @@ FreeSpace FreeListManyCachedFastPath::Allocate(size_t size_in_bytes,
   // Fast path part 2: searching the medium categories for tiny objects
   if (node.is_null()) {
     if (size_in_bytes <= kTinyObjectMaxSize) {
-      for (type = cache[kFastPathFallBackTiny]; type < kFastPathFirstCategory;
-           type = cache[type + 1]) {
+      for (type = next_nonempty_category[kFastPathFallBackTiny];
+           type < kFastPathFirstCategory;
+           type = next_nonempty_category[type + 1]) {
         node = TryFindNodeIn(type, size_in_bytes, node_size);
         if (!node.is_null()) break;
       }
@@ -3478,7 +3435,8 @@ FreeSpace FreeListManyCachedFastPath::Allocate(size_t size_in_bytes,
   // Finally, search the most precise category
   if (node.is_null()) {
     type = SelectFreeListCategoryType(size_in_bytes);
-    for (type = cache[type]; type < first_category; type = cache[type + 1]) {
+    for (type = next_nonempty_category[type]; type < first_category;
+         type = next_nonempty_category[type + 1]) {
       node = TryFindNodeIn(type, size_in_bytes, node_size);
       if (!node.is_null()) break;
     }
@@ -3486,19 +3444,11 @@ FreeSpace FreeListManyCachedFastPath::Allocate(size_t size_in_bytes,
 
   // Updating cache
   if (!node.is_null() && categories_[type] == nullptr) {
-    for (int i = type; i >= kFirstCategory && cache[i] == type; i--) {
-      cache[i] = cache[type + 1];
-    }
+    UpdateCacheAfterEmptying(type);
   }
 
 #ifdef DEBUG
-  // Checking cache
-  for (int i = 0; i <= last_category_; i++) {
-    DCHECK(cache[i] == last_category_ + 1 || categories_[cache[i]] != nullptr);
-    for (int j = i; j < cache[i]; j++) {
-      DCHECK(categories_[j] == nullptr);
-    }
-  }
+  CheckCacheIntegrity();
 #endif
 
   if (!node.is_null()) {
