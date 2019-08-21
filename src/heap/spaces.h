@@ -2071,7 +2071,6 @@ class V8_EXPORT_PRIVATE FreeListManyCached : public FreeListMany {
   }
 
 #ifdef DEBUG
-  // Checking cache
   void CheckCacheIntegrity() {
     for (int i = 0; i <= last_category_; i++) {
       DCHECK(next_nonempty_category[i] == last_category_ + 1 ||
@@ -2085,7 +2084,7 @@ class V8_EXPORT_PRIVATE FreeListManyCached : public FreeListMany {
 
   // The cache is overallocated by one so that the last element is always
   // defined, and when updating the cache, we can always use cache[i+1] as long
-  // as i is < kCacheSize.
+  // as i is < kNumberOfCategories.
   int next_nonempty_category[kNumberOfCategories + 1];
 
  private:
@@ -2093,7 +2092,7 @@ class V8_EXPORT_PRIVATE FreeListManyCached : public FreeListMany {
     for (int i = 0; i < kNumberOfCategories; i++) {
       next_nonempty_category[i] = kNumberOfCategories;
     }
-    // Setting the after-last element as well, as explained in the class
+    // Setting the after-last element as well, as explained in the cache's
     // declaration.
     next_nonempty_category[kNumberOfCategories] = kNumberOfCategories;
   }
