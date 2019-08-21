@@ -143,5 +143,135 @@ TEST_F(SpacesTest, CodeRangeAddressReuse) {
   EXPECT_EQ(code_range6, code_range3);
 }
 
+// Tests that FreeListMany::SelectFreeListCategoryType returns what it should.
+TEST_F(SpacesTest, FreeListManySelectFreeListCategoryType) {
+  FreeListMany free_list;
+
+  // Testing that all sizes bellow 256 bytes get assigned the correct
+  for (size_t size = 0; size <= FreeListMany::kPreciseCategoryMaxSize; size++) {
+    FreeListCategoryType cat = free_list.SelectFreeListCategoryType(size);
+    // if cat == 0, then size < categories_min[1]
+    EXPECT_TRUE((cat != 0) || (size < free_list.categories_min[1]));
+    // if cat > 0, then categories_min[cat] <= size < categories_min[cat+1]
+    EXPECT_TRUE((cat == 0) || ((free_list.categories_min[cat] <= size) &&
+                               (size < free_list.categories_min[cat + 1])));
+  }
+
+  // Not gonna test very size above 256 (that would be a bit long), but only
+  // some "interesting cases": picking some number in the middle of the
+  // categories, as well as at the categories' bounds.
+  for (int cat = kFirstCategory + 1; cat <= free_list.last_category_; cat++) {
+    std::vector<size_t> sizes;
+    // Adding size less than this category's minimum
+    sizes.push_back(free_list.categories_min[cat] - 8);
+    // Adding size equal to this category's minimum
+    sizes.push_back(free_list.categories_min[cat]);
+    // Adding size greater than this category's minimum
+    sizes.push_back(free_list.categories_min[cat] + 8);
+    // Adding size between this category's minimum and the next category
+    if (cat != free_list.last_category_) {
+      sizes.push_back(
+          (free_list.categories_min[cat] + free_list.categories_min[cat + 1]) /
+          2);
+    }
+
+    for (size_t size : sizes) {
+      FreeListCategoryType cat = free_list.SelectFreeListCategoryType(size);
+      // We should have categories_min[cat] <= size < categories_min[cat+1], or,
+      // if cat == last_category_, we should just have
+      // categories_min[last_category_] <= size
+      EXPECT_TRUE((free_list.categories_min[cat] <= size) &&
+                  (cat == free_list.last_category_ ||
+                   (size < free_list.categories_min[cat + 1])));
+    }
+  }
+}
+
+// Tests that FreeListMany::GuaranteedAllocatable returns what it should.
+TEST_F(SpacesTest, FreeListManyGuaranteedAllocatable) {
+  FreeListMany free_list;
+
+  for (int cat = kFirstCategory; cat < free_list.last_category_; cat++) {
+    std::vector<size_t> sizes;
+    // Adding size less than this category's minimum
+    sizes.push_back(free_list.categories_min[cat] - 8);
+    // Adding size equal to this category's minimum
+    sizes.push_back(free_list.categories_min[cat]);
+    // Adding size greater than this category's minimum
+    sizes.push_back(free_list.categories_min[cat] + 8);
+    if (cat != free_list.last_category_) {
+      // Adding size between this category's minimum and the next category
+      sizes.push_back(
+          (free_list.categories_min[cat] + free_list.categories_min[cat + 1]) /
+          2);
+    }
+
+    for (size_t size : sizes) {
+      FreeListCategoryType cat_free =
+          free_list.SelectFreeListCategoryType(size);
+      size_t guaranteed_allocatable = free_list.GuaranteedAllocatable(size);
+      // We should have either
+      //  - cat_free == last_category &&
+      //  SelectFreeListCategoryType(guaranteed_allocatable) == last_category
+      //    (since last category is iterated entirely)
+      //  - size < categories_min[0] && guaranteed_allocatable == 0
+      //    (since those bytes would be wasted)
+      //  - categories_min[cat_free] >= guaranteed_allocatable &&
+      //  guaranteed_allocatable <= size
+      EXPECT_TRUE(
+          (cat_free == free_list.last_category_ &&
+           free_list.SelectFreeListCategoryType(guaranteed_allocatable) ==
+               free_list.last_category_) ||
+          (size < free_list.categories_min[0] && guaranteed_allocatable == 0) ||
+          (free_list.categories_min[cat_free] >= guaranteed_allocatable &&
+           guaranteed_allocatable <= size));
+    }
+  }
+}
+
+// Tests that FreeListManyCachedFastPath::SelectFreeListCategoryType returns
+// what it should.
+TEST_F(SpacesTest, FreeListManyCachedFastPathSelectFreeListCategoryType) {
+  FreeListManyCachedFastPath free_list;
+
+  for (int cat = kFirstCategory; cat <= free_list.last_category_; cat++) {
+    std::vector<size_t> sizes;
+    // Adding size less than this category's minimum
+    sizes.push_back(free_list.categories_min[cat] - 8);
+    // Adding size equal to this category's minimum
+    sizes.push_back(free_list.categories_min[cat]);
+    // Adding size greater than this category's minimum
+    sizes.push_back(free_list.categories_min[cat] + 8);
+    // Adding size between this category's minimum and the next category
+    if (cat != free_list.last_category_) {
+      sizes.push_back(
+          (free_list.categories_min[cat] + free_list.categories_min[cat + 1]) /
+          2);
+    }
+
+    for (size_t size : sizes) {
+      FreeListCategoryType cat =
+          free_list.SelectFastAllocationFreeListCategoryType(size);
+      // We should have either:
+      //  - size < kTinyObjectMaxSize && cat == kFastPathFirstCategory
+      //    (ie, tiny sizes hit in the 2-3k category)
+      //  - categories_min[cat] >= size + 1.85k && categories_min[cat-1] <= size
+      //  + 1.85k
+      //    (ie, |cat| contains elements of at least size+2k, and is the
+      //    smallest category to do so)
+      //  - size >= categories_min[last_category]-1.85k && cat == last_category
+      EXPECT_TRUE((size <= FreeListManyCachedFastPath::kTinyObjectMaxSize &&
+                   cat == FreeListManyCachedFastPath::kFastPathFirstCategory) ||
+                  (free_list.categories_min[cat] >=
+                       size + FreeListManyCachedFastPath::kFastPathOffset &&
+                   free_list.categories_min[cat - 1] <
+                       size + FreeListManyCachedFastPath::kFastPathOffset) ||
+                  (size >= free_list.categories_min[free_list.last_category_] -
+                               FreeListManyCachedFastPath::kFastPathOffset &&
+                   cat == free_list.last_category_));
+    }
+  }
+}
+
 }  // namespace internal
 }  // namespace v8

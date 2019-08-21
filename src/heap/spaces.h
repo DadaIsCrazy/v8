@@ -31,6 +31,7 @@
 #include "src/tasks/cancelable-task.h"
 #include "src/utils/allocation.h"
 #include "src/utils/utils.h"
+#include "testing/gtest/include/gtest/gtest_prod.h"  // nogncheck
 
 namespace v8 {
 namespace internal {
@@ -2002,26 +2003,34 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
   //   while ($cat[-1] <= 32768) {
   //     push @cat, $cat[-1]+$cat[-3], $cat[-1]*2
   //   }
-  //   push @cat, "Page::kPageSize";
   //   say join ", ", @cat;
   //   say "\n", scalar @cat'
-  static const int kNumberOfCategories = 47;
-  static const size_t categories_max[kNumberOfCategories];
+  static const int kNumberOfCategories = 46;
+  static constexpr size_t categories_min[kNumberOfCategories] = {
+      24,    32,    40,    48,    56,    64,   72,   80,   88,   96,
+      104,   112,   120,   128,   136,   144,  152,  160,  168,  176,
+      184,   192,   200,   208,   216,   224,  232,  240,  248,  256,
+      384,   512,   768,   1024,  1536,  2048, 3072, 4096, 6144, 8192,
+      12288, 16384, 24576, 32768, 49152, 65536};
 
   // Return the smallest category that could hold |size_in_bytes| bytes.
   FreeListCategoryType SelectFreeListCategoryType(
       size_t size_in_bytes) override {
     if (size_in_bytes <= kPreciseCategoryMaxSize) {
-      if (size_in_bytes <= categories_max[0]) return 0;
+      if (size_in_bytes < categories_min[1]) return 0;
       return static_cast<FreeListCategoryType>(size_in_bytes >> 3) - 3;
     }
-    for (int cat = (256 >> 3) - 2; cat < last_category_; cat++) {
-      if (size_in_bytes <= categories_max[cat]) {
+    for (int cat = (kPreciseCategoryMaxSize >> 3) - 3; cat < last_category_;
+         cat++) {
+      if (size_in_bytes < categories_min[cat + 1]) {
         return cat;
       }
     }
     return last_category_;
   }
+
+  FRIEND_TEST(SpacesTest, FreeListManySelectFreeListCategoryType);
+  FRIEND_TEST(SpacesTest, FreeListManyGuaranteedAllocatable);
 };
 
 // Same as FreeListMany but uses a cache to know which categories are empty.
@@ -2105,6 +2114,10 @@ class V8_EXPORT_PRIVATE FreeListManyCached : public FreeListMany {
 // category (2k to 3k) not being used; both of which are undesirable.
 // A secondary fast path is used for tiny objects (size <= 128), in order to
 // consider categories from 256 to 2048 bytes for them.
+// Note that this class uses a precise GetPageForSize (inherited from
+// FreeListMany), which makes its fast path less fast in the Scavenger. This is
+// done on purpose, since this class's only purpose is to be used by
+// FreeListManyCachedOrigin, which is precise for the scavenger.
 class V8_EXPORT_PRIVATE FreeListManyCachedFastPath : public FreeListManyCached {
  public:
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
@@ -2112,33 +2125,37 @@ class V8_EXPORT_PRIVATE FreeListManyCachedFastPath : public FreeListManyCached {
                                            AllocationOrigin origin) override;
 
  protected:
-  // Objects in the 36th category are at least 2056 bytes
-  static const FreeListCategoryType kFastPathFirstCategory = 36;
-  static const size_t kFastPathStart = 2056;
+  // Objects in the 36th category are at least 2048 bytes
+  static const FreeListCategoryType kFastPathFirstCategory = 35;
+  static const size_t kFastPathStart = 2048;
   static const size_t kTinyObjectMaxSize = 128;
   static const size_t kFastPathOffset = kFastPathStart - kTinyObjectMaxSize;
   // Objects in the 30th category are at least 256 bytes
-  static const FreeListCategoryType kFastPathFallBackTiny = 30;
+  static const FreeListCategoryType kFastPathFallBackTiny = 29;
+
+  STATIC_ASSERT(categories_min[kFastPathFirstCategory] == kFastPathStart);
+  STATIC_ASSERT(categories_min[kFastPathFallBackTiny] ==
+                kTinyObjectMaxSize * 2);
 
   FreeListCategoryType SelectFastAllocationFreeListCategoryType(
       size_t size_in_bytes) {
     DCHECK(size_in_bytes < kMaxBlockSize);
 
-    if (size_in_bytes >= categories_max[last_category_ - 1])
-      return last_category_;
+    if (size_in_bytes >= categories_min[last_category_]) return last_category_;
 
     size_in_bytes += kFastPathOffset;
     for (int cat = kFastPathFirstCategory; cat < last_category_; cat++) {
-      if (size_in_bytes <= categories_max[cat - 1]) {
+      if (size_in_bytes <= categories_min[cat]) {
         return cat;
       }
     }
     return last_category_;
   }
+
+  FRIEND_TEST(SpacesTest, FreeListManyCachedFastPathSelectFreeListCategoryType);
 };
 
 // Uses FreeListManyCached if in the GC; FreeListManyCachedFastPath otherwise.
-
 // The reasonning behind this FreeList is the following: the GC runs in
 // parallel, and therefore, more expensive allocations there are less
 // noticeable. On the other hand, the generated code and runtime need to be very
