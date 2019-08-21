@@ -229,9 +229,11 @@ TEST_F(SpacesTest, FreeListManyGuaranteedAllocatable) {
   }
 }
 
-// Tests that FreeListManyCachedFastPath::SelectFreeListCategoryType returns
+// Tests that
+// FreeListManyCachedFastPath::SelectFastAllocationFreeListCategoryType returns
 // what it should.
-TEST_F(SpacesTest, FreeListManyCachedFastPathSelectFreeListCategoryType) {
+TEST_F(SpacesTest,
+       FreeListManyCachedFastPathSelectFastAllocationFreeListCategoryType) {
   FreeListManyCachedFastPath free_list;
 
   for (int cat = kFirstCategory; cat <= free_list.last_category_; cat++) {
@@ -255,8 +257,8 @@ TEST_F(SpacesTest, FreeListManyCachedFastPathSelectFreeListCategoryType) {
       // We should have either:
       //  - size < kTinyObjectMaxSize && cat == kFastPathFirstCategory
       //    (ie, tiny sizes hit in the 2-3k category)
-      //  - categories_min[cat] >= size + 1.85k && categories_min[cat-1] <= size
-      //  + 1.85k
+      //  - categories_min[cat] >= size + 1.85k &&
+      //      categories_min[cat-1] <= size + 1.85k
       //    (ie, |cat| contains elements of at least size+2k, and is the
       //    smallest category to do so)
       //  - size >= categories_min[last_category]-1.85k && cat == last_category

@@ -2152,7 +2152,9 @@ class V8_EXPORT_PRIVATE FreeListManyCachedFastPath : public FreeListManyCached {
     return last_category_;
   }
 
-  FRIEND_TEST(SpacesTest, FreeListManyCachedFastPathSelectFreeListCategoryType);
+  FRIEND_TEST(
+      SpacesTest,
+      FreeListManyCachedFastPathSelectFastAllocationFreeListCategoryType);
 };
 
 // Uses FreeListManyCached if in the GC; FreeListManyCachedFastPath otherwise.
