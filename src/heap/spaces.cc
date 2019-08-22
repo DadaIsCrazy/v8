@@ -3253,7 +3253,7 @@ bool FreeListManyCached::AddCategory(FreeListCategory* category) {
 
   // Updating cache
   if (was_added) {
-    UpdateCacheAfterUnemptying(category->type_);
+    UpdateCacheAfterAddition(category->type_);
   }
 
 #ifdef DEBUG
@@ -3269,7 +3269,7 @@ void FreeListManyCached::RemoveCategory(FreeListCategory* category) {
   // Updating cache
   int type = category->type_;
   if (categories_[type] == nullptr) {
-    UpdateCacheAfterEmptying(type);
+    UpdateCacheAfterRemoval(type);
   }
 
 #ifdef DEBUG
@@ -3296,7 +3296,7 @@ size_t FreeListManyCached::Free(Address start, size_t size_in_bytes,
 
   // Updating cache
   if (mode == kLinkCategory) {
-    UpdateCacheAfterUnemptying(type);
+    UpdateCacheAfterAddition(type);
 
 #ifdef DEBUG
     CheckCacheIntegrity();
@@ -3329,7 +3329,7 @@ FreeSpace FreeListManyCached::Allocate(size_t size_in_bytes, size_t* node_size,
 
   // Updating cache
   if (!node.is_null() && categories_[type] == nullptr) {
-    UpdateCacheAfterEmptying(type);
+    UpdateCacheAfterRemoval(type);
   }
 
 #ifdef DEBUG
@@ -3395,7 +3395,7 @@ FreeSpace FreeListManyCachedFastPath::Allocate(size_t size_in_bytes,
 
   // Updating cache
   if (!node.is_null() && categories_[type] == nullptr) {
-    UpdateCacheAfterEmptying(type);
+    UpdateCacheAfterRemoval(type);
   }
 
 #ifdef DEBUG

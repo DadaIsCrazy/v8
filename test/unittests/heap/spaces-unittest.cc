@@ -147,19 +147,23 @@ TEST_F(SpacesTest, CodeRangeAddressReuse) {
 TEST_F(SpacesTest, FreeListManySelectFreeListCategoryType) {
   FreeListMany free_list;
 
-  // Testing that all sizes bellow 256 bytes get assigned the correct
+  // Testing that all sizes below 256 bytes get assigned the correct category
   for (size_t size = 0; size <= FreeListMany::kPreciseCategoryMaxSize; size++) {
     FreeListCategoryType cat = free_list.SelectFreeListCategoryType(size);
-    // if cat == 0, then size < categories_min[1]
-    EXPECT_TRUE((cat != 0) || (size < free_list.categories_min[1]));
-    // if cat > 0, then categories_min[cat] <= size < categories_min[cat+1]
-    EXPECT_TRUE((cat == 0) || ((free_list.categories_min[cat] <= size) &&
-                               (size < free_list.categories_min[cat + 1])));
+    if (cat == 0) {
+      // If cat == 0, then we make sure that |size| doesn't fit in the 2nd
+      // category.
+      EXPECT_TRUE(size < free_list.categories_min[1]);
+    } else {
+      // Otherwise, size should fit in |cat|, but not in |cat+1|.
+      EXPECT_TRUE(free_list.categories_min[cat] <= size);
+      EXPECT_TRUE(size < free_list.categories_min[cat + 1]);
+    }
   }
 
-  // Not gonna test very size above 256 (that would be a bit long), but only
-  // some "interesting cases": picking some number in the middle of the
-  // categories, as well as at the categories' bounds.
+  // Testing every size above 256 would take long time, so test only some
+  // "interesting cases": picking some number in the middle of the categories,
+  // as well as at the categories' bounds.
   for (int cat = kFirstCategory + 1; cat <= free_list.last_category_; cat++) {
     std::vector<size_t> sizes;
     // Adding size less than this category's minimum
@@ -177,12 +181,15 @@ TEST_F(SpacesTest, FreeListManySelectFreeListCategoryType) {
 
     for (size_t size : sizes) {
       FreeListCategoryType cat = free_list.SelectFreeListCategoryType(size);
-      // We should have categories_min[cat] <= size < categories_min[cat+1], or,
-      // if cat == last_category_, we should just have
-      // categories_min[last_category_] <= size
-      EXPECT_TRUE((free_list.categories_min[cat] <= size) &&
-                  (cat == free_list.last_category_ ||
-                   (size < free_list.categories_min[cat + 1])));
+      if (cat == free_list.last_category_) {
+        // If cat == last_category, then we make sure that |size| indeeds fits
+        // in the last category.
+        EXPECT_TRUE(free_list.categories_min[cat] <= size);
+      } else {
+        // Otherwise, size should fit in |cat|, but not in |cat+1|.
+        EXPECT_TRUE(free_list.categories_min[cat] <= size);
+        EXPECT_TRUE(size < free_list.categories_min[cat + 1]);
+      }
     }
   }
 }
@@ -210,21 +217,21 @@ TEST_F(SpacesTest, FreeListManyGuaranteedAllocatable) {
       FreeListCategoryType cat_free =
           free_list.SelectFreeListCategoryType(size);
       size_t guaranteed_allocatable = free_list.GuaranteedAllocatable(size);
-      // We should have either
-      //  - cat_free == last_category &&
-      //  SelectFreeListCategoryType(guaranteed_allocatable) == last_category
-      //    (since last category is iterated entirely)
-      //  - size < categories_min[0] && guaranteed_allocatable == 0
-      //    (since those bytes would be wasted)
-      //  - categories_min[cat_free] >= guaranteed_allocatable &&
-      //  guaranteed_allocatable <= size
-      EXPECT_TRUE(
-          (cat_free == free_list.last_category_ &&
-           free_list.SelectFreeListCategoryType(guaranteed_allocatable) ==
-               free_list.last_category_) ||
-          (size < free_list.categories_min[0] && guaranteed_allocatable == 0) ||
-          (free_list.categories_min[cat_free] >= guaranteed_allocatable &&
-           guaranteed_allocatable <= size));
+      if (cat_free == free_list.last_category_) {
+        // If |cat_free| == last_category, then guaranteed_allocatable must
+        // return the last category, because when allocating, the last category
+        // is searched entirely.
+        EXPECT_EQ(free_list.SelectFreeListCategoryType(guaranteed_allocatable),
+                  free_list.last_category_);
+      } else if (size < free_list.categories_min[0]) {
+        // If size < free_list.categories_min[0], then the bytes are wasted, and
+        // guaranteed_allocatable should return 0.
+        EXPECT_EQ(guaranteed_allocatable, 0ul);
+      } else {
+        // Otherwise, |guaranteed_allocatable| is equal to the minimum of
+        // |size|'s category (|cat_free|);
+        EXPECT_EQ(free_list.categories_min[cat_free], guaranteed_allocatable);
+      }
     }
   }
 }
@@ -254,23 +261,25 @@ TEST_F(SpacesTest,
     for (size_t size : sizes) {
       FreeListCategoryType cat =
           free_list.SelectFastAllocationFreeListCategoryType(size);
-      // We should have either:
-      //  - size < kTinyObjectMaxSize && cat == kFastPathFirstCategory
-      //    (ie, tiny sizes hit in the 2-3k category)
-      //  - categories_min[cat] >= size + 1.85k &&
-      //      categories_min[cat-1] <= size + 1.85k
-      //    (ie, |cat| contains elements of at least size+2k, and is the
-      //    smallest category to do so)
-      //  - size >= categories_min[last_category]-1.85k && cat == last_category
-      EXPECT_TRUE((size <= FreeListManyCachedFastPath::kTinyObjectMaxSize &&
-                   cat == FreeListManyCachedFastPath::kFastPathFirstCategory) ||
-                  (free_list.categories_min[cat] >=
-                       size + FreeListManyCachedFastPath::kFastPathOffset &&
-                   free_list.categories_min[cat - 1] <
-                       size + FreeListManyCachedFastPath::kFastPathOffset) ||
-                  (size >= free_list.categories_min[free_list.last_category_] -
-                               FreeListManyCachedFastPath::kFastPathOffset &&
-                   cat == free_list.last_category_));
+      if (size <= FreeListManyCachedFastPath::kTinyObjectMaxSize) {
+        // For tiny objects, the first category of the fast path should be
+        // chosen.
+        EXPECT_TRUE(cat == FreeListManyCachedFastPath::kFastPathFirstCategory);
+      } else if (size >= free_list.categories_min[free_list.last_category_] -
+                             FreeListManyCachedFastPath::kFastPathOffset) {
+        // For objects close to the minimum of the last category, the last
+        // category is chosen.
+        EXPECT_EQ(cat, free_list.last_category_);
+      } else {
+        // For other objects, the chosen category must satisfy that its minimum
+        // is at least |size|+1.85k.
+        EXPECT_TRUE(free_list.categories_min[cat] >=
+                    size + FreeListManyCachedFastPath::kFastPathOffset);
+        // And the smaller categoriy's minimum is less than |size|+1.85k
+        // (otherwise it would have been chosen instead).
+        EXPECT_TRUE(free_list.categories_min[cat - 1] <
+                    size + FreeListManyCachedFastPath::kFastPathOffset);
+      }
     }
   }
 }

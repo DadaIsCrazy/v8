@@ -2055,7 +2055,7 @@ class V8_EXPORT_PRIVATE FreeListManyCached : public FreeListMany {
 
  protected:
   // Updates the cache after adding something in the category |cat|.
-  void UpdateCacheAfterUnemptying(FreeListCategoryType cat) {
+  void UpdateCacheAfterAddition(FreeListCategoryType cat) {
     for (int i = cat; i >= kFirstCategory && next_nonempty_category[i] > cat;
          i--) {
       next_nonempty_category[i] = cat;
@@ -2063,7 +2063,7 @@ class V8_EXPORT_PRIVATE FreeListManyCached : public FreeListMany {
   }
 
   // Updates the cache after emptying category |cat|.
-  void UpdateCacheAfterEmptying(FreeListCategoryType cat) {
+  void UpdateCacheAfterRemoval(FreeListCategoryType cat) {
     for (int i = cat; i >= kFirstCategory && next_nonempty_category[i] == cat;
          i--) {
       next_nonempty_category[i] = next_nonempty_category[cat + 1];
