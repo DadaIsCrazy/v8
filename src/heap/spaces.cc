@@ -3175,7 +3175,7 @@ FreeSpace FreeListFastAlloc::Allocate(size_t size_in_bytes, size_t* node_size,
 // ------------------------------------------------
 // FreeListMany implementation
 
-constexpr size_t FreeListMany::categories_min[kNumberOfCategories];
+constexpr unsigned int FreeListMany::categories_min[kNumberOfCategories];
 
 FreeListMany::FreeListMany() {
   // Initializing base (FreeList) fields

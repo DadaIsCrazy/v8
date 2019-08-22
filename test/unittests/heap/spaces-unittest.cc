@@ -153,11 +153,11 @@ TEST_F(SpacesTest, FreeListManySelectFreeListCategoryType) {
     if (cat == 0) {
       // If cat == 0, then we make sure that |size| doesn't fit in the 2nd
       // category.
-      EXPECT_TRUE(size < free_list.categories_min[1]);
+      EXPECT_LT(size, free_list.categories_min[1]);
     } else {
       // Otherwise, size should fit in |cat|, but not in |cat+1|.
-      EXPECT_TRUE(free_list.categories_min[cat] <= size);
-      EXPECT_TRUE(size < free_list.categories_min[cat + 1]);
+      EXPECT_LE(free_list.categories_min[cat], size);
+      EXPECT_LT(size, free_list.categories_min[cat + 1]);
     }
   }
 
@@ -184,11 +184,11 @@ TEST_F(SpacesTest, FreeListManySelectFreeListCategoryType) {
       if (cat == free_list.last_category_) {
         // If cat == last_category, then we make sure that |size| indeeds fits
         // in the last category.
-        EXPECT_TRUE(free_list.categories_min[cat] <= size);
+        EXPECT_LE(free_list.categories_min[cat], size);
       } else {
         // Otherwise, size should fit in |cat|, but not in |cat+1|.
-        EXPECT_TRUE(free_list.categories_min[cat] <= size);
-        EXPECT_TRUE(size < free_list.categories_min[cat + 1]);
+        EXPECT_LE(free_list.categories_min[cat], size);
+        EXPECT_LT(size, free_list.categories_min[cat + 1]);
       }
     }
   }
@@ -273,12 +273,12 @@ TEST_F(SpacesTest,
       } else {
         // For other objects, the chosen category must satisfy that its minimum
         // is at least |size|+1.85k.
-        EXPECT_TRUE(free_list.categories_min[cat] >=
-                    size + FreeListManyCachedFastPath::kFastPathOffset);
+        EXPECT_GE(free_list.categories_min[cat],
+                  size + FreeListManyCachedFastPath::kFastPathOffset);
         // And the smaller categoriy's minimum is less than |size|+1.85k
         // (otherwise it would have been chosen instead).
-        EXPECT_TRUE(free_list.categories_min[cat - 1] <
-                    size + FreeListManyCachedFastPath::kFastPathOffset);
+        EXPECT_LT(free_list.categories_min[cat - 1],
+                  size + FreeListManyCachedFastPath::kFastPathOffset);
       }
     }
   }
