@@ -2125,6 +2125,87 @@ class V8_EXPORT_PRIVATE FreeListFastAlloc : public FreeList {
   }
 };
 
+// Inspired by FreeListLegacy.
+// Only has 4 categories: Small, Medium, Large and Huge.
+// Any block that would have belong to tiniest, tiny  in FreeListLegacy
+// is considered wasted.
+class V8_EXPORT_PRIVATE FreeListLegacyNoTiny : public FreeList {
+ public:
+ public:
+  size_t GuaranteedAllocatable(size_t maximum_freed) override {
+    if (maximum_freed < kSmallListMax) {
+      return 0;
+    } else if (maximum_freed <= kMediumListMax) {
+      return kMediumAllocationMax;
+    } else if (maximum_freed <= kLargeListMax) {
+      return kLargeAllocationMax;
+    }
+    return maximum_freed;
+  }
+
+  Page* GetPageForSize(size_t size_in_bytes) override {
+    const int minimum_category =
+        static_cast<int>(SelectFreeListCategoryType(size_in_bytes));
+    Page* page = GetPageForCategoryType(kHuge);
+    if (!page && static_cast<int>(kLarge) >= minimum_category)
+      page = GetPageForCategoryType(kLarge);
+    if (!page && static_cast<int>(kMedium) >= minimum_category)
+      page = GetPageForCategoryType(kMedium);
+    if (!page && static_cast<int>(kSmall) >= minimum_category)
+      page = GetPageForCategoryType(kSmall);
+    return page;
+  }
+
+  FreeListLegacyNoTiny();
+  ~FreeListLegacyNoTiny();
+
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size, AllocationOrigin origin) override;
+
+ protected:
+  enum { kSmall, kMedium, kLarge, kHuge };
+
+  static const size_t kMinBlockSize = 0xff * kTaggedSize;
+
+  // This is a conservative upper bound. The actual maximum block size takes
+  // padding and alignment of data and code pages into account.
+  static const size_t kMaxBlockSize = Page::kPageSize;
+
+  static const size_t kSmallListMax = kMinBlockSize;         // 2048
+  static const size_t kMediumListMax = 0x7ff * kTaggedSize;  // 16376
+  static const size_t kLargeListMax = 0x1fff * kTaggedSize;  // 65528
+  static const size_t kMediumAllocationMax = kSmallListMax;
+  static const size_t kLargeAllocationMax = kMediumListMax;
+
+  FreeListCategoryType SelectFreeListCategoryType(
+      size_t size_in_bytes) override {
+    if (size_in_bytes <= kSmallListMax) {
+      return kSmall;
+    } else if (size_in_bytes <= kMediumListMax) {
+      return kMedium;
+    } else if (size_in_bytes <= kLargeListMax) {
+      return kLarge;
+    }
+    return kHuge;
+  }
+
+  // Returns the category to be used to allocate |size_in_bytes| in the fast
+  // path. The tiny categories are not used for fast allocation.
+  FreeListCategoryType SelectFastAllocationFreeListCategoryType(
+      size_t size_in_bytes) {
+    if (size_in_bytes <= kMinBlockSize) {
+      return kSmall;
+    } else if (size_in_bytes <= kMediumAllocationMax) {
+      return kMedium;
+    } else if (size_in_bytes <= kLargeAllocationMax) {
+      return kLarge;
+    }
+    return kHuge;
+  }
+
+  friend class FreeListCategory;
+};
+
 
 // Use 47 Freelists: on per size between 24 and 256, and then a few ones for
 // larger sizes. See the variable |categories_max| for the size of each

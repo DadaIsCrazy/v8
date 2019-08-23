@@ -3037,6 +3037,7 @@ FreeList* FreeList::CreateFreeList() {
     case 21: return new FreeListManyFastFindFastPathFaster1();
     case 22: return new FreeListManyFastFindFastPathFaster2();
     case 23: return new FreeListManyPreciseGetPage<FreeListManyOriginFastFindFaster1>();
+    case 24: return new FreeListLegacyNoTiny();
     default: FATAL("Unknown freelist strategy");
   }
 }
@@ -3303,6 +3304,68 @@ FreeSpace FreeListFastAlloc::Allocate(size_t size_in_bytes, size_t* node_size, A
   DCHECK(IsVeryLong() || Available() == SumFreeLists());
   return node;
 }
+
+// ------------------------------------------------
+// FreeListLegacyNoTiny implementation
+
+FreeListLegacyNoTiny::FreeListLegacyNoTiny() {
+  // Initializing base (FreeList) fields
+  number_of_categories_ = kHuge + 1;
+  last_category_ = kHuge;
+  min_block_size_ = kMinBlockSize;
+  categories_ = new FreeListCategory*[number_of_categories_]();
+  if (FLAG_gc_invert_freelist_sort) {
+    categories_end_ = new FreeListCategory*[number_of_categories_]();
+  }
+
+  Reset();
+}
+
+FreeListLegacyNoTiny::~FreeListLegacyNoTiny() {
+  delete[] categories_;
+  if (FLAG_gc_invert_freelist_sort) {
+    delete[] categories_end_;
+  }
+}
+
+FreeSpace FreeListLegacyNoTiny::Allocate(size_t size_in_bytes, size_t* node_size, AllocationOrigin origin) {
+  USE(origin);
+  DCHECK_GE(kMaxBlockSize, size_in_bytes);
+  FreeSpace node;
+  // First try the allocation fast path: try to allocate the minimum element
+  // size of a free list category. This operation is constant time.
+  FreeListCategoryType type =
+      SelectFastAllocationFreeListCategoryType(size_in_bytes);
+  for (int i = type; i < kHuge && node.is_null(); i++) {
+    node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                         node_size);
+  }
+
+  if (node.is_null()) {
+    // Next search the huge list for free list nodes. This takes linear time in
+    // the number of huge elements.
+    node = SearchForNodeInList(kHuge, size_in_bytes, node_size);
+  }
+
+  if (node.is_null() && type != kHuge) {
+    // We didn't find anything in the huge list.
+    type = SelectFreeListCategoryType(size_in_bytes);
+
+    if (node.is_null()) {
+      // Now search the best fitting free list for a node that has at least the
+      // requested size.
+      node = TryFindNodeIn(type, size_in_bytes, node_size);
+    }
+  }
+
+  if (!node.is_null()) {
+    Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+  }
+
+  DCHECK(IsVeryLong() || Available() == SumFreeLists());
+  return node;
+}
+
 
 // ------------------------------------------------
 // FreeListMany implementation
