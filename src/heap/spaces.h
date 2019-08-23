@@ -1983,6 +1983,12 @@ class V8_EXPORT_PRIVATE FreeListLegacySlowPath : public FreeListLegacy {
                                            size_t* node_size, AllocationOrigin origin) override;
 };
 
+// Like FreeListLegacy, but without fast path
+class V8_EXPORT_PRIVATE FreeListLegacySlowPathRetry : public FreeListLegacy {
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size, AllocationOrigin origin) override;
+};
+
 
 // FreeList that only contains full pages;
 class FreeListFullPages final : public FreeList {

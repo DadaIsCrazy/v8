@@ -3038,6 +3038,7 @@ FreeList* FreeList::CreateFreeList() {
     case 22: return new FreeListManyFastFindFastPathFaster2();
     case 23: return new FreeListManyPreciseGetPage<FreeListManyOriginFastFindFaster1>();
     case 24: return new FreeListLegacyNoTiny();
+    case 25: return new FreeListLegacySlowPathRetry();
     default: FATAL("Unknown freelist strategy");
   }
 }
@@ -3192,6 +3193,29 @@ FreeSpace FreeListLegacySlowPath::Allocate(size_t size_in_bytes,
   return node;
 }
 
+// ------------------------------------------------
+// FreeListLegacySlowPathRetry implementation
+
+FreeSpace FreeListLegacySlowPathRetry::Allocate(size_t size_in_bytes,
+                                                size_t* node_size, AllocationOrigin origin) {
+  USE(origin);
+  DCHECK_GE(kMaxBlockSize, size_in_bytes);
+  FreeSpace node;
+  // First try the allocation fast path: try to allocate the minimum element
+  // size of a free list category. This operation is constant time.
+  FreeListCategoryType type = SelectFreeListCategoryType(size_in_bytes);
+  for (int i = type; i <= kHuge && node.is_null(); i++) {
+    node = SearchForNodeInList(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                               node_size);
+  }
+
+  if (!node.is_null()) {
+    Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+  }
+
+  DCHECK(IsVeryLong() || Available() == SumFreeLists());
+  return node;
+}
 
 // ------------------------------------------------
 // FreeListLegacyMoreSmalls implementation
@@ -3406,11 +3430,15 @@ size_t FreeListMany::GuaranteedAllocatable(size_t maximum_freed) {
 }
 
 Page* FreeListMany::GetPageForSize(size_t size_in_bytes) {
-  const int minimum_category =
-      static_cast<int>(SelectFreeListCategoryType(size_in_bytes));
-  Page* page = GetPageForCategoryType(last_category_);
-  for (int cat = last_category_ - 1; !page && cat >= minimum_category; cat--) {
+  FreeListCategoryType minimum_category =
+      SelectFreeListCategoryType(size_in_bytes);
+  Page* page = nullptr;
+  for (int cat = minimum_category + 1; !page && cat <= last_category_; cat++) {
     page = GetPageForCategoryType(cat);
+  }
+  if (!page) {
+    // Might return a page in which |size_in_bytes| will not fit.
+    page = GetPageForCategoryType(minimum_category);
   }
   return page;
 }
