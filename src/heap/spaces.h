@@ -2289,6 +2289,44 @@ class V8_EXPORT_PRIVATE FreeListManyCachedFastPath : public FreeListManyCached {
       FreeListManyCachedFastPathSelectFastAllocationFreeListCategoryType);
 };
 
+class V8_EXPORT_PRIVATE FreeListManyMoreFastPath : public FreeListManyMore {
+ public:
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size,
+                                           AllocationOrigin origin) override;
+
+ protected:
+  // Objects in the 36th category are at least 2048 bytes
+  static const FreeListCategoryType kFastPathFirstCategory = 36;
+  static const size_t kFastPathStart = 2048;
+  static const size_t kTinyObjectMaxSize = 128;
+  // Objects in the 30th category are at least 256 bytes
+  static const FreeListCategoryType kFastPathFallBackTiny = 29;
+
+  STATIC_ASSERT(categories_min[kFastPathFirstCategory] == kFastPathStart);
+  STATIC_ASSERT(categories_min[kFastPathFallBackTiny] ==
+                kTinyObjectMaxSize * 2);
+
+  FreeListCategoryType SelectFastAllocationFreeListCategoryType(
+      size_t size_in_bytes) {
+    DCHECK(size_in_bytes < kMaxBlockSize);
+
+    if (size_in_bytes >= categories_min[last_category_]) return last_category_;
+
+    if (size_in_bytes <= kTinyObjectMaxSize) return kFastPathFirstCategory;
+
+    size_in_bytes += kFastPathStart;
+
+    FreeListCategoryType cat = SelectFreeListCategoryType(size_in_bytes);
+
+    if (((size_in_bytes | 2048) & 4095) == 2048) {
+      return cat;
+    } else {
+      return cat < last_category_ ? cat + 1 : cat;
+    }
+  }
+};
+
 class V8_EXPORT_PRIVATE FreeListManyMoreCachedFastPath : public FreeListManyMoreCached {
  public:
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,

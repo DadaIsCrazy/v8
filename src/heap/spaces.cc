@@ -3028,6 +3028,8 @@ FreeList* FreeList::CreateFreeList() {
       return new FreeListManyMoreCachedFastPath();
     case 9:
       return new FreeListManyMoreCachedOrigin();
+    case 10:
+      return new FreeListManyMoreFastPath();
     default:
       FATAL("Invalid FreeList strategy");
   }
@@ -3589,6 +3591,7 @@ FreeSpace FreeListManyCachedFastPath::Allocate(size_t size_in_bytes,
   return node;
 }
 
+
 // ------------------------------------------------
 // FreeListManyMoreCachedFastPath implementation
 
@@ -3646,6 +3649,59 @@ FreeSpace FreeListManyMoreCachedFastPath::Allocate(size_t size_in_bytes,
 #ifdef DEBUG
   CheckCacheIntegrity();
 #endif
+
+  if (!node.is_null()) {
+    Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+  }
+
+  DCHECK(IsVeryLong() || Available() == SumFreeLists());
+  return node;
+}
+
+
+// ------------------------------------------------
+// FreeListManyMoreFastPath implementation
+
+FreeSpace FreeListManyMoreFastPath::Allocate(size_t size_in_bytes,
+                                                   size_t* node_size,
+                                                   AllocationOrigin origin) {
+  USE(origin);
+  DCHECK_GE(kMaxBlockSize, size_in_bytes);
+  FreeSpace node;
+
+  // Fast path part 1: searching the last categories
+  FreeListCategoryType first_category =
+      SelectFastAllocationFreeListCategoryType(size_in_bytes);
+  FreeListCategoryType type = first_category;
+  for (; type <= last_category_; type++) {
+    node = TryFindNodeIn(type, size_in_bytes, node_size);
+    if (!node.is_null()) break;
+  }
+
+  // Fast path part 2: searching the medium categories for tiny objects
+  if (node.is_null()) {
+    if (size_in_bytes <= kTinyObjectMaxSize) {
+      for (type = kFastPathFallBackTiny; type < kFastPathFirstCategory; type++) {
+        node = TryFindNodeIn(type, size_in_bytes, node_size);
+        if (!node.is_null()) break;
+      }
+    }
+  }
+
+  // Searching the last category
+  if (node.is_null()) {
+    // Searching each element of the last category.
+    node = SearchForNodeInList(last_category_, size_in_bytes, node_size);
+  }
+
+  // Finally, search the most precise category
+  if (node.is_null()) {
+    for (type = SelectFreeListCategoryType(size_in_bytes); type < first_category;
+         type++) {
+      node = TryFindNodeIn(type, size_in_bytes, node_size);
+      if (!node.is_null()) break;
+    }
+  }
 
   if (!node.is_null()) {
     Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
