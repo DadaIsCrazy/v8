@@ -225,7 +225,8 @@ class FreeListCategory {
   FreeListCategory* next_;
 
   friend class FreeList;
-  friend class FreeListManyCached;
+  template <class FreeListBase> friend class FreeListCached;
+  friend class FreeListFullPages;
   friend class PagedSpace;
   friend class MapSpace;
 
@@ -257,6 +258,10 @@ class FreeList {
   // its contents will be destroyed. The start address should be word aligned,
   // and the size should be a non-zero multiple of the word size.
   virtual size_t Free(Address start, size_t size_in_bytes, FreeMode mode);
+  virtual size_t Free(Address start, size_t size_in_bytes, FreeMode mode,
+                      AllocationOrigin origin) {
+    return Free(start, size_in_bytes, mode);
+  }
 
   // Allocates a free space node frome the free list of at least size_in_bytes
   // bytes. Returns the actual node size in node_size which can be bigger than
@@ -1844,7 +1849,7 @@ class V8_EXPORT_PRIVATE FreeListLegacy : public FreeList {
                                            size_t* node_size,
                                            AllocationOrigin origin) override;
 
- private:
+ protected:
   enum { kTiniest, kTiny, kSmall, kMedium, kLarge, kHuge };
 
   static const size_t kMinBlockSize = 3 * kTaggedSize;
@@ -1968,25 +1973,203 @@ class V8_EXPORT_PRIVATE FreeListFastAlloc : public FreeList {
   }
 };
 
+
+class V8_EXPORT_PRIVATE FreeListLegacyMoreSmalls : public FreeList {
+   public:
+  size_t GuaranteedAllocatable(size_t maximum_freed) override {
+    if (maximum_freed <= categories_max[0]) {
+      // Since we are not iterating over all list entries, we cannot guarantee
+      // that we can find the maximum freed block in that free list.
+      return 0;
+    }
+    for (int i = 1; i < kLastCategory; i++) {
+      if (maximum_freed <= categories_max[i]) {
+        return categories_max[i-1];
+      }
+    }
+    return maximum_freed;
+  }
+
+  Page* GetPageForSize(size_t size_in_bytes) override {
+    const int minimum_category =
+        static_cast<int>(SelectFreeListCategoryType(size_in_bytes));
+    Page* page = GetPageForCategoryType(kLastCategory);
+    for (int i = kLastCategory-1; !page && i >= minimum_category; i--) {
+      page = GetPageForCategoryType(i);
+    }
+    return page;
+  }
+
+  FreeListLegacyMoreSmalls();
+  ~FreeListLegacyMoreSmalls();
+
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size, AllocationOrigin origin) override;
+
+ protected:
+  static const int kNumberOfCategories = 33;
+  static const int kLastCategory = kNumberOfCategories-1;
+  static const size_t categories_max[kNumberOfCategories];
+  static const size_t kSmallAllocationMaxIndex = 28;
+
+  static const size_t kMinBlockSize = 3 * kTaggedSize;
+
+  // This is a conservative upper bound. The actual maximum block size takes
+  // padding and alignment of data and code pages into account.
+  static const size_t kMaxBlockSize = Page::kPageSize;
+
+  FreeListCategoryType SelectFreeListCategoryType(
+      size_t size_in_bytes) override {
+    if (size_in_bytes < 256) {
+      if (size_in_bytes <= 24) return 0;
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 3) - 3;
+    }
+    for (int i = 29; i < kNumberOfCategories; i++) {
+      if (size_in_bytes <= categories_max[i]) {
+        return i;
+      }
+    }
+    return kLastCategory;
+  }
+
+  // Returns the category to be used to allocate |size_in_bytes| in the fast
+  // path. The tiny categories are not used for fast allocation.
+  FreeListCategoryType SelectFastAllocationFreeListCategoryType(
+      size_t size_in_bytes) {
+    for (int i = kSmallAllocationMaxIndex; i < kLastCategory; i++) {
+      if (size_in_bytes <= categories_max[i]) {
+        return i+1;
+      }
+    }
+    return kLastCategory;
+  }
+};
+
+
+// Inspired by FreeListLegacy.
+// Only has 4 categories: Small, Medium, Large and Huge.
+// Any block that would have belong to tiniest, tiny  in FreeListLegacy
+// is considered wasted.
+class V8_EXPORT_PRIVATE FreeListLegacyNoTiny : public FreeList {
+ public:
+ public:
+  size_t GuaranteedAllocatable(size_t maximum_freed) override {
+    if (maximum_freed < kSmallListMax) {
+      return 0;
+    } else if (maximum_freed <= kMediumListMax) {
+      return kMediumAllocationMax;
+    } else if (maximum_freed <= kLargeListMax) {
+      return kLargeAllocationMax;
+    }
+    return maximum_freed;
+  }
+
+  Page* GetPageForSize(size_t size_in_bytes) override {
+    const int minimum_category =
+        static_cast<int>(SelectFreeListCategoryType(size_in_bytes));
+    Page* page = GetPageForCategoryType(kHuge);
+    if (!page && static_cast<int>(kLarge) >= minimum_category)
+      page = GetPageForCategoryType(kLarge);
+    if (!page && static_cast<int>(kMedium) >= minimum_category)
+      page = GetPageForCategoryType(kMedium);
+    if (!page && static_cast<int>(kSmall) >= minimum_category)
+      page = GetPageForCategoryType(kSmall);
+    return page;
+  }
+
+  FreeListLegacyNoTiny();
+  ~FreeListLegacyNoTiny();
+
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size, AllocationOrigin origin) override;
+
+ protected:
+  enum { kSmall, kMedium, kLarge, kHuge };
+
+  static const size_t kMinBlockSize = 0xff * kTaggedSize;
+
+  // This is a conservative upper bound. The actual maximum block size takes
+  // padding and alignment of data and code pages into account.
+  static const size_t kMaxBlockSize = Page::kPageSize;
+
+  static const size_t kSmallListMax = kMinBlockSize;         // 2048
+  static const size_t kMediumListMax = 0x7ff * kTaggedSize;  // 16376
+  static const size_t kLargeListMax = 0x1fff * kTaggedSize;  // 65528
+  static const size_t kMediumAllocationMax = kSmallListMax;
+  static const size_t kLargeAllocationMax = kMediumListMax;
+
+  FreeListCategoryType SelectFreeListCategoryType(
+      size_t size_in_bytes) override {
+    if (size_in_bytes <= kSmallListMax) {
+      return kSmall;
+    } else if (size_in_bytes <= kMediumListMax) {
+      return kMedium;
+    } else if (size_in_bytes <= kLargeListMax) {
+      return kLarge;
+    }
+    return kHuge;
+  }
+
+  // Returns the category to be used to allocate |size_in_bytes| in the fast
+  // path. The tiny categories are not used for fast allocation.
+  FreeListCategoryType SelectFastAllocationFreeListCategoryType(
+      size_t size_in_bytes) {
+    if (size_in_bytes <= kMinBlockSize) {
+      return kSmall;
+    } else if (size_in_bytes <= kMediumAllocationMax) {
+      return kMedium;
+    } else if (size_in_bytes <= kLargeAllocationMax) {
+      return kLarge;
+    }
+    return kHuge;
+  }
+
+  friend class FreeListCategory;
+};
+
+
+// Like FreeListLegacy, but without fast path, and the slow path goes through
+// the entire freelists (instead of looking only the top).
+class V8_EXPORT_PRIVATE FreeListLegacySlowPathRetry : public FreeListLegacy {
+
+  Page* GetPageForSize(size_t size_in_bytes) override {
+    const int minimum_category =
+        static_cast<int>(SelectFreeListCategoryType(size_in_bytes));
+
+    Page* page = GetPageForCategoryType(minimum_category);
+    for (int i = minimum_category+1; i <= kHuge && !page; i++) {
+      page = GetPageForCategoryType(i);
+    }
+    return page;
+  }
+
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size, AllocationOrigin origin) override;
+};
+
+template <class FreeListBase>
+class FreeListPrecise : public FreeListBase {
+ public:
+  size_t GuaranteedAllocatable(size_t maximum_freed) override;
+
+  Page* GetPageForSize(size_t size_in_bytes) override;
+
+  FreeListPrecise();
+  ~FreeListPrecise();
+
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size,
+                                           AllocationOrigin origin) override;
+
+};
+
 // Use 47 Freelists: on per size between 24 and 256, and then a few ones for
 // larger sizes. See the variable |categories_max| for the size of each
 // Freelist.  Allocation is done using a best-fit strategy (considering only the
 // first element of each category though).
 // Performances are expected to be worst than FreeListLegacy, but memory
 // consumption should be lower (since fragmentation should be lower).
-class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
- public:
-  size_t GuaranteedAllocatable(size_t maximum_freed) override;
-
-  Page* GetPageForSize(size_t size_in_bytes) override;
-
-  FreeListMany();
-  ~FreeListMany();
-
-  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
-                                           size_t* node_size,
-                                           AllocationOrigin origin) override;
-
+class V8_EXPORT_PRIVATE FreeListManyData : public FreeList {
  protected:
   static const size_t kMinBlockSize = 3 * kTaggedSize;
 
@@ -2029,18 +2212,277 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
     return last_category_;
   }
 
-  FRIEND_TEST(SpacesTest, FreeListManySelectFreeListCategoryType);
-  FRIEND_TEST(SpacesTest, FreeListManyGuaranteedAllocatable);
+  // FRIEND_TEST(SpacesTest, FreeListManySelectFreeListCategoryType);
+  // FRIEND_TEST(SpacesTest, FreeListManyGuaranteedAllocatable);
 };
+
+using FreeListMany = FreeListPrecise<FreeListManyData>;
+
+
+class V8_EXPORT_PRIVATE FreeListManyMoreData : public FreeList {
+ protected:
+  static const size_t kMinBlockSize = 3 * kTaggedSize;
+
+  // This is a conservative upper bound. The actual maximum block size takes
+  // padding and alignment of data and code pages into account.
+  static const size_t kMaxBlockSize = Page::kPageSize;
+  // Largest size for which categories are still precise, and for which we can
+  // therefore compute the category in constant time.
+  static const size_t kTinyCategoryMaxSize = 256;
+  static const size_t kMediumCategoryMaxSize = 2048;
+  static const size_t kFirstMediumCategory = 29;
+  static const size_t kFirstLargeCategory = 36;
+  static const size_t kLastCategoryMin = 65536;
+
+  // Categories boundaries generated with:
+  // perl -E '
+  //  @cat = map {$_*8} 3..32;
+  //  while ($cat[-1] < 2048) {
+  //    push @cat, $cat[-1]+256;
+  //  }
+  //  while ($cat[-1] < 65536) {
+  //    push @cat, $cat[-1]+1024;
+  //  }
+  //  say join ", ", @cat;
+  //  say "\n", scalar @cat;'
+  static const int kNumberOfCategories = 99;
+  static constexpr unsigned int categories_min[kNumberOfCategories] = {
+    24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 512, 768, 1024, 1280, 1536, 1792, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336, 15360, 16384, 17408, 18432, 19456, 20480, 21504, 22528, 23552, 24576, 25600, 26624, 27648, 28672, 29696, 30720, 31744, 32768, 33792, 34816, 35840, 36864, 37888, 38912, 39936, 40960, 41984, 43008, 44032, 45056, 46080, 47104, 48128, 49152, 50176, 51200, 52224, 53248, 54272, 55296, 56320, 57344, 58368, 59392, 60416, 61440, 62464, 63488, 64512, 65536};
+
+
+  // Return the smallest category that could hold |size_in_bytes| bytes.
+  FreeListCategoryType SelectFreeListCategoryType(
+      size_t size_in_bytes) override {
+    if (size_in_bytes < kTinyCategoryMaxSize) {
+      if (size_in_bytes < categories_min[1]) return 0;
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 3) - 3;
+    }
+    if (size_in_bytes < kMediumCategoryMaxSize) {
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 8) + kFirstMediumCategory-1;
+    }
+    if (size_in_bytes < kLastCategoryMin) {
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 10) + kFirstLargeCategory-1;
+    }
+    return last_category_;
+  }
+};
+
+using FreeListManyMore = FreeListPrecise<FreeListManyMoreData>;
+
+class V8_EXPORT_PRIVATE FreeListManyMore4kData : public FreeList {
+ protected:
+  static const size_t kMinBlockSize = 3 * kTaggedSize;
+
+  // This is a conservative upper bound. The actual maximum block size takes
+  // padding and alignment of data and code pages into account.
+  static const size_t kMaxBlockSize = Page::kPageSize;
+  // Largest size for which categories are still precise, and for which we can
+  // therefore compute the category in constant time.
+  static const size_t kTinyCategoryMaxSize = 256;
+  static const size_t kMediumCategoryMaxSize = 2048;
+  static const size_t kFirstMediumCategory = 29;
+  static const size_t kFirstLargeCategory = 37;
+  static const size_t kLastCategoryMin = 67584;
+
+  // Categories boundaries generated with:
+  // perl -E '
+  //  @cat = map {$_*8} 3..32;
+  //  while ($cat[-1] < 2048) {
+  //    push @cat, $cat[-1]+256;
+  //  }
+  //  push@cat,4096;
+  //  while ($cat[-1] < 65536) {
+  //    push @cat, $cat[-1]+4096;
+  //  }
+  //  say join ", ", @cat;
+  //  say "\n", scalar @cat'
+  static const int kNumberOfCategories = 53;
+  static constexpr unsigned int categories_min[kNumberOfCategories] = {
+    24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 512, 768, 1024, 1280, 1536, 1792, 2048, 4096, 8192, 12288, 16384, 20480, 24576, 28672, 32768, 36864, 40960, 45056, 49152, 53248, 57344, 61440, 65536};
+
+
+  // Return the smallest category that could hold |size_in_bytes| bytes.
+  FreeListCategoryType SelectFreeListCategoryType(
+      size_t size_in_bytes) override {
+    if (size_in_bytes < kTinyCategoryMaxSize) {
+      if (size_in_bytes < categories_min[1]) return 0;
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 3) - 3;
+    }
+    if (size_in_bytes < kMediumCategoryMaxSize) {
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 8) + kFirstMediumCategory-1;
+    }
+    if (size_in_bytes < 4096) return static_cast<FreeListCategoryType>(kFirstLargeCategory-1);
+    if (size_in_bytes < kLastCategoryMin) {
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 12) + kFirstLargeCategory-1;
+    }
+    return last_category_;
+  }
+};
+
+using FreeListManyMore4k = FreeListPrecise<FreeListManyMore4kData>;
+
+class V8_EXPORT_PRIVATE FreeListManyMoreWholeRegionData : public FreeList {
+ protected:
+  static const size_t kMinBlockSize = 3 * kTaggedSize;
+
+  // This is a conservative upper bound. The actual maximum block size takes
+  // padding and alignment of data and code pages into account.
+  static const size_t kMaxBlockSize = Page::kPageSize;
+  // Largest size for which categories are still precise, and for which we can
+  // therefore compute the category in constant time.
+  static const size_t kTinyCategoryMaxSize = 256;
+  static const size_t kMediumCategoryMaxSize = 2048;
+  static const size_t kFirstMediumCategory = 29;
+  static const size_t kFirstLargeCategory = 36;
+  static const size_t kLastCategoryMin = 131072;
+
+  // Categories boundaries generated with:
+  // perl -E '
+  //  @cat = map {$_*8} 3..32;
+  //  while ($cat[-1] < 2048) {
+  //    push @cat, $cat[-1]+256;
+  //  }
+  //  while ($cat[-1] < (65536*2)) {
+  //    push @cat, $cat[-1]+1024;
+  //  }
+  //  say join ", ", @cat;
+  //  say "\n", scalar @cat;'
+  static const int kNumberOfCategories = 163;
+  static constexpr unsigned int categories_min[kNumberOfCategories] = {
+    24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 512, 768, 1024, 1280, 1536, 1792, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336, 15360, 16384, 17408, 18432, 19456, 20480, 21504, 22528, 23552, 24576, 25600, 26624, 27648, 28672, 29696, 30720, 31744, 32768, 33792, 34816, 35840, 36864, 37888, 38912, 39936, 40960, 41984, 43008, 44032, 45056, 46080, 47104, 48128, 49152, 50176, 51200, 52224, 53248, 54272, 55296, 56320, 57344, 58368, 59392, 60416, 61440, 62464, 63488, 64512, 65536, 66560, 67584, 68608, 69632, 70656, 71680, 72704, 73728, 74752, 75776, 76800, 77824, 78848, 79872, 80896, 81920, 82944, 83968, 84992, 86016, 87040, 88064, 89088, 90112, 91136, 92160, 93184, 94208, 95232, 96256, 97280, 98304, 99328, 100352, 101376, 102400, 103424, 104448, 105472, 106496, 107520, 108544, 109568, 110592, 111616, 112640, 113664, 114688, 115712, 116736, 117760, 118784, 119808, 120832, 121856, 122880, 123904, 124928, 125952, 126976, 128000, 129024, 130048, 131072 };
+
+
+  // Return the smallest category that could hold |size_in_bytes| bytes.
+  FreeListCategoryType SelectFreeListCategoryType(
+      size_t size_in_bytes) override {
+    if (size_in_bytes < kTinyCategoryMaxSize) {
+      if (size_in_bytes < categories_min[1]) return 0;
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 3) - 3;
+    }
+    if (size_in_bytes < kMediumCategoryMaxSize) {
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 8) + kFirstMediumCategory-1;
+    }
+    if (size_in_bytes < kLastCategoryMin) {
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 10) + kFirstLargeCategory-1;
+    }
+    return last_category_;
+  }
+};
+
+using FreeListManyMoreWholeRegion = FreeListPrecise<FreeListManyMoreWholeRegionData>;
+
+
+class V8_EXPORT_PRIVATE FreeListManyMoreWholeRegion2kData : public FreeList {
+ protected:
+  static const size_t kMinBlockSize = 3 * kTaggedSize;
+
+  // This is a conservative upper bound. The actual maximum block size takes
+  // padding and alignment of data and code pages into account.
+  static const size_t kMaxBlockSize = Page::kPageSize;
+  // Largest size for which categories are still precise, and for which we can
+  // therefore compute the category in constant time.
+  static const size_t kTinyCategoryMaxSize = 256;
+  static const size_t kMediumCategoryMaxSize = 2048;
+  static const size_t kFirstMediumCategory = 29;
+  static const size_t kFirstLargeCategory = 36;
+  static const size_t kLastCategoryMin = 131072;
+
+  // Categories boundaries generated with:
+  // perl -E '
+  //  @cat = map {$_*8} 3..32;
+  //  while ($cat[-1] < 2048) {
+  //    push @cat, $cat[-1]+256;
+  //  }
+  //  while ($cat[-1] < (65536*2)) {
+  //    push @cat, $cat[-1]+2048;
+  //  }
+  //  say join ", ", @cat;
+  //  say "\n", scalar @cat;'
+  static const int kNumberOfCategories = 100;
+  static constexpr unsigned int categories_min[kNumberOfCategories] = {
+    24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 512, 768, 1024, 1280, 1536, 1792, 2048, 4096, 6144, 8192, 10240, 12288, 14336, 16384, 18432, 20480, 22528, 24576, 26624, 28672, 30720, 32768, 34816, 36864, 38912, 40960, 43008, 45056, 47104, 49152, 51200, 53248, 55296, 57344, 59392, 61440, 63488, 65536, 67584, 69632, 71680, 73728, 75776, 77824, 79872, 81920, 83968, 86016, 88064, 90112, 92160, 94208, 96256, 98304, 100352, 102400, 104448, 106496, 108544, 110592, 112640, 114688, 116736, 118784, 120832, 122880, 124928, 126976, 129024, 131072};
+
+
+  // Return the smallest category that could hold |size_in_bytes| bytes.
+  FreeListCategoryType SelectFreeListCategoryType(
+      size_t size_in_bytes) override {
+    if (size_in_bytes < kTinyCategoryMaxSize) {
+      if (size_in_bytes < categories_min[1]) return 0;
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 3) - 3;
+    }
+    if (size_in_bytes < kMediumCategoryMaxSize) {
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 8) + kFirstMediumCategory-1;
+    }
+    if (size_in_bytes < kLastCategoryMin) {
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 11) + kFirstLargeCategory-1;
+    }
+    return last_category_;
+  }
+};
+
+using FreeListManyMoreWholeRegion2k = FreeListPrecise<FreeListManyMoreWholeRegion2kData>;
+
+class V8_EXPORT_PRIVATE FreeListManyMoreWholeRegion4kData : public FreeList {
+ protected:
+  static const size_t kMinBlockSize = 3 * kTaggedSize;
+
+  // This is a conservative upper bound. The actual maximum block size takes
+  // padding and alignment of data and code pages into account.
+  static const size_t kMaxBlockSize = Page::kPageSize;
+  // Largest size for which categories are still precise, and for which we can
+  // therefore compute the category in constant time.
+  static const size_t kTinyCategoryMaxSize = 256;
+  static const size_t kMediumCategoryMaxSize = 2048;
+  static const size_t kFirstMediumCategory = 29;
+  static const size_t kFirstLargeCategory = 37;
+  static const size_t kLastCategoryMin = 131072;
+
+  // Categories boundaries generated with:
+  // perl -E '
+  //  @cat = map {$_*8} 3..32;
+  //  while ($cat[-1] < 2048) {
+  //    push @cat, $cat[-1]+256;
+  //  }
+  //  push@cat,4096;
+  //  while ($cat[-1] < (65536*2)) {
+  //    push @cat, $cat[-1]+4096;
+  //  }
+  //  say join ", ", @cat;
+  //  say "\n", scalar @cat'
+  static const int kNumberOfCategories = 69;
+  static constexpr unsigned int categories_min[kNumberOfCategories] = {
+    24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 512, 768, 1024, 1280, 1536, 1792, 2048, 4096, 8192, 12288, 16384, 20480, 24576, 28672, 32768, 36864, 40960, 45056, 49152, 53248, 57344, 61440, 65536, 69632, 73728, 77824, 81920, 86016, 90112, 94208, 98304, 102400, 106496, 110592, 114688, 118784, 122880, 126976, 131072};
+
+
+  // Return the smallest category that could hold |size_in_bytes| bytes.
+  FreeListCategoryType SelectFreeListCategoryType(
+      size_t size_in_bytes) override {
+    if (size_in_bytes < kTinyCategoryMaxSize) {
+      if (size_in_bytes < categories_min[1]) return 0;
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 3) - 3;
+    }
+    if (size_in_bytes < kMediumCategoryMaxSize) {
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 8) + kFirstMediumCategory-1;
+    }
+    if (size_in_bytes < kLastCategoryMin) {
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 12) + kFirstLargeCategory-1;
+    }
+    return last_category_;
+  }
+};
+
+using FreeListManyMoreWholeRegion4k = FreeListPrecise<FreeListManyMoreWholeRegion4kData>;
+
 
 // Same as FreeListMany but uses a cache to know which categories are empty.
 // The cache (|next_nonempty_category|) is maintained in a way such that for
 // each category c, next_nonempty_category[c] contains the first non-empty
 // category greater or equal to c, that may hold an object of size c.
 // Allocation is done using the same strategy as FreeListMany (ie, best fit).
-class V8_EXPORT_PRIVATE FreeListManyCached : public FreeListMany {
+template <class FreeListBase>
+class V8_EXPORT_PRIVATE FreeListCached : public FreeListBase {
  public:
-  FreeListManyCached();
+  FreeListCached();
 
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                            size_t* node_size,
@@ -2054,6 +2496,8 @@ class V8_EXPORT_PRIVATE FreeListManyCached : public FreeListMany {
   void RemoveCategory(FreeListCategory* category) override;
 
  protected:
+  static const int kNumberOfCategories = FreeListBase::kNumberOfCategories;
+
   // Updates the cache after adding something in the category |cat|.
   void UpdateCacheAfterAddition(FreeListCategoryType cat) {
     for (int i = cat; i >= kFirstCategory && next_nonempty_category[i] > cat;
@@ -2072,11 +2516,11 @@ class V8_EXPORT_PRIVATE FreeListManyCached : public FreeListMany {
 
 #ifdef DEBUG
   void CheckCacheIntegrity() {
-    for (int i = 0; i <= last_category_; i++) {
-      DCHECK(next_nonempty_category[i] == last_category_ + 1 ||
-             categories_[next_nonempty_category[i]] != nullptr);
+    for (int i = 0; i <= FreeListBase::last_category_; i++) {
+      DCHECK(next_nonempty_category[i] == FreeListBase::last_category_ + 1 ||
+              FreeListBase::categories_[next_nonempty_category[i]] != nullptr);
       for (int j = i; j < next_nonempty_category[i]; j++) {
-        DCHECK(categories_[j] == nullptr);
+        DCHECK( FreeListBase::categories_[j] == nullptr);
       }
     }
   }
@@ -2117,7 +2561,7 @@ class V8_EXPORT_PRIVATE FreeListManyCached : public FreeListMany {
 // FreeListMany), which makes its fast path less fast in the Scavenger. This is
 // done on purpose, since this class's only purpose is to be used by
 // FreeListManyCachedOrigin, which is precise for the scavenger.
-class V8_EXPORT_PRIVATE FreeListManyCachedFastPath : public FreeListManyCached {
+class V8_EXPORT_PRIVATE FreeListManyCachedFastPath : public FreeListCached<FreeListMany> {
  public:
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                            size_t* node_size,
@@ -2155,6 +2599,85 @@ class V8_EXPORT_PRIVATE FreeListManyCachedFastPath : public FreeListManyCached {
       SpacesTest,
       FreeListManyCachedFastPathSelectFastAllocationFreeListCategoryType);
 };
+
+
+template <class FreeListManyMoreBase, int FastPathStart>
+class V8_EXPORT_PRIVATE FreeListManyMoreCachedFastPath : public FreeListManyMoreBase {
+ public:
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size,
+                                           AllocationOrigin origin) override;
+
+ protected:
+  // Objects in the 36th category are at least 2048 bytes
+  static const FreeListCategoryType kFastPathFirstCategory = FastPathStart == 4096 ? 37 : 36;
+  static const size_t kFastPathStart = FastPathStart;
+  static const size_t kTinyObjectMaxSize = 128;
+  // Objects in the 30th category are at least 256 bytes
+  static const FreeListCategoryType kFastPathFallBackTiny = 29;
+
+  // STATIC_ASSERT(FreeListManyMoreBase::categories_min[kFastPathFirstCategory] == kFastPathStart);
+  // STATIC_ASSERT(FreeListManyMoreBase::categories_min[kFastPathFallBackTiny] ==
+  //               kTinyObjectMaxSize * 2);
+
+  FreeListCategoryType SelectFastAllocationFreeListCategoryType(
+      size_t size_in_bytes) {
+    DCHECK(size_in_bytes < FreeListManyMoreBase::kMaxBlockSize);
+
+    if (size_in_bytes >= FreeListManyMoreBase::categories_min[FreeListManyMoreBase::last_category_])
+      return FreeListManyMoreBase::last_category_;
+
+    if (size_in_bytes <= kTinyObjectMaxSize) return kFastPathFirstCategory;
+
+    size_in_bytes += kFastPathStart;
+
+    FreeListCategoryType cat = FreeListManyMoreBase::SelectFreeListCategoryType(size_in_bytes);
+
+    return cat < FreeListManyMoreBase::last_category_ ? cat + 1 : cat;
+  }
+};
+
+using FreeListManyMoreFastPath = FreeListManyMoreCachedFastPath<FreeListCached<FreeListManyMore>,1024>;
+using FreeListManyMore4kFastPath = FreeListManyMoreCachedFastPath<FreeListCached<FreeListManyMore4k>,4096>;
+using FreeListManyMoreWholeRegionFastPath = FreeListManyMoreCachedFastPath<FreeListCached<FreeListManyMoreWholeRegion>,1024>;
+using FreeListManyMoreWholeRegion2kFastPath = FreeListManyMoreCachedFastPath<FreeListCached<FreeListManyMoreWholeRegion2k>,2048>;
+using FreeListManyMoreWholeRegion4kFastPath = FreeListManyMoreCachedFastPath<FreeListCached<FreeListManyMoreWholeRegion4k>,4096>;
+
+class FreeListManyMoreFastPathNoCache : public FreeListManyMore {
+ public:
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size,
+                                           AllocationOrigin origin) override;
+
+ protected:
+  // Objects in the 36th category are at least 2048 bytes
+  static const FreeListCategoryType kFastPathFirstCategory = 36;
+  static const size_t kFastPathStart = 1024;
+  static const size_t kTinyObjectMaxSize = 128;
+  // Objects in the 30th category are at least 256 bytes
+  static const FreeListCategoryType kFastPathFallBackTiny = 29;
+
+  // STATIC_ASSERT(FreeListManyMoreBase::categories_min[kFastPathFirstCategory] == kFastPathStart);
+  // STATIC_ASSERT(FreeListManyMoreBase::categories_min[kFastPathFallBackTiny] ==
+  //               kTinyObjectMaxSize * 2);
+
+  FreeListCategoryType SelectFastAllocationFreeListCategoryType(
+      size_t size_in_bytes) {
+    DCHECK(size_in_bytes < kMaxBlockSize);
+
+    if (size_in_bytes >= categories_min[last_category_])
+      return last_category_;
+
+    if (size_in_bytes <= kTinyObjectMaxSize) return kFastPathFirstCategory;
+
+    size_in_bytes += kFastPathStart;
+
+    FreeListCategoryType cat = SelectFreeListCategoryType(size_in_bytes);
+
+    return cat < last_category_ ? cat + 1 : cat;
+  }
+};
+
 
 // Uses FreeListManyCached if in the GC; FreeListManyCachedFastPath otherwise.
 // The reasonning behind this FreeList is the following: the GC runs in
@@ -2194,6 +2717,70 @@ class V8_EXPORT_PRIVATE FreeListMap : public FreeList {
   FreeListCategoryType SelectFreeListCategoryType(
       size_t size_in_bytes) override {
     return kOnlyCategory;
+  }
+};
+
+
+// FreeList that only contains full pages;
+class FreeListFullPages final : public FreeList {
+ public:
+  FreeListFullPages() {
+    number_of_categories_ = 1;
+    last_category_ = 0;
+    min_block_size_ = Page::kPageSize - Page::kHeaderSize;
+    categories_ = new FreeListCategory*[number_of_categories_]();
+    Reset();
+  }
+  ~FreeListFullPages() {  delete[] categories_; }
+
+  size_t GuaranteedAllocatable(size_t maximum_freed) final {
+    if (maximum_freed >= min_block_size_) {
+      return maximum_freed;
+    } else {
+      return 0;
+    }
+  }
+
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size,
+                                           AllocationOrigin origin)  final {
+    FreeSpace node;
+    node = TryFindNodeIn(0, size_in_bytes, node_size);
+    if (!node.is_null()) {
+      Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+    }
+    return node;
+  }
+
+  size_t Free(Address start, size_t size_in_bytes, FreeMode mode,
+                      AllocationOrigin origin) final {
+    Page* page = Page::FromAddress(start);
+    page->DecreaseAllocatedBytes(size_in_bytes);
+
+    if (origin == AllocationOrigin::kGC || size_in_bytes < 24) {
+      page->add_wasted_memory(size_in_bytes);
+      wasted_bytes_ += size_in_bytes;
+      return size_in_bytes;
+    }
+
+    if (categories_[0] != nullptr) {
+      EvictFreeListItems(Page::FromHeapObject(categories_[0]->top()));
+    }
+    DCHECK(categories_[0] == nullptr);
+
+    page->free_list_category(0)->Free(start, size_in_bytes, mode);
+    DCHECK_EQ(page->AvailableInFreeList(),
+              page->AvailableInFreeListFromAllocatedBytes());
+    return 0;
+  }
+
+  Page* GetPageForSize(size_t size_in_bytes) final {
+    return GetPageForCategoryType(0);
+  }
+
+ private:
+  FreeListCategoryType SelectFreeListCategoryType(size_t size_in_bytes) final {
+    return 0;
   }
 };
 
@@ -2398,14 +2985,15 @@ class V8_EXPORT_PRIVATE PagedSpace
       int size_in_bytes, AllocationAlignment alignment,
       AllocationOrigin origin = AllocationOrigin::kRuntime);
 
-  size_t Free(Address start, size_t size_in_bytes, SpaceAccountingMode mode) {
+  size_t Free(Address start, size_t size_in_bytes, SpaceAccountingMode mode,
+              AllocationOrigin origin = AllocationOrigin::kRuntime) {
     if (size_in_bytes == 0) return 0;
     heap()->CreateFillerObjectAt(start, static_cast<int>(size_in_bytes),
                                  ClearRecordedSlots::kNo);
     if (mode == SpaceAccountingMode::kSpaceAccounted) {
-      return AccountedFree(start, size_in_bytes);
+      return AccountedFree(start, size_in_bytes, origin);
     } else {
-      return UnaccountedFree(start, size_in_bytes);
+      return UnaccountedFree(start, size_in_bytes, origin);
     }
   }
 
@@ -2413,16 +3001,18 @@ class V8_EXPORT_PRIVATE PagedSpace
   // the free list or accounted as waste.
   // If add_to_freelist is false then just accounting stats are updated and
   // no attempt to add area to free list is made.
-  size_t AccountedFree(Address start, size_t size_in_bytes) {
-    size_t wasted = free_list_->Free(start, size_in_bytes, kLinkCategory);
+  size_t AccountedFree(Address start, size_t size_in_bytes,
+                       AllocationOrigin origin = AllocationOrigin::kRuntime) {
+    size_t wasted = free_list_->Free(start, size_in_bytes, kLinkCategory, origin);
     Page* page = Page::FromAddress(start);
     accounting_stats_.DecreaseAllocatedBytes(size_in_bytes, page);
     DCHECK_GE(size_in_bytes, wasted);
     return size_in_bytes - wasted;
   }
 
-  size_t UnaccountedFree(Address start, size_t size_in_bytes) {
-    size_t wasted = free_list_->Free(start, size_in_bytes, kDoNotLinkCategory);
+  size_t UnaccountedFree(Address start, size_t size_in_bytes,
+                         AllocationOrigin origin = AllocationOrigin::kRuntime) {
+    size_t wasted = free_list_->Free(start, size_in_bytes, kDoNotLinkCategory, origin);
     DCHECK_GE(size_in_bytes, wasted);
     return size_in_bytes - wasted;
   }
