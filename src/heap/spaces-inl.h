@@ -394,6 +394,10 @@ AllocationResult PagedSpace::AllocateRawUnaligned(int size_in_bytes,
     UpdateAllocationOrigins(origin);
   }
 
+  if (identity() == OLD_SPACE && FLAG_trace_mem_alloc) {
+    PrintF("Allocate: %d\n", size_in_bytes);
+  }
+
   return object;
 }
 
