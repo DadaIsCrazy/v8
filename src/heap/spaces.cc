@@ -3034,6 +3034,7 @@ FreeList* FreeList::CreateFreeList() {
     case 23: return new FreeListManyMoreWholeRegion2kFastPath();
     case 24: return new FreeListManyMoreWholeRegion4kFastPath();
     case 25: return new FreeListManyMoreFastPathNoCache();
+    case 26: return new FreeListLegacyMoreSmallsSlowPath();
     default:
       FATAL("Invalid FreeList strategy");
   }
@@ -3204,6 +3205,36 @@ FreeSpace FreeListLegacyMoreSmalls::Allocate(size_t size_in_bytes, size_t* node_
     for (int i = smallest_type; node.is_null() && i < type; i++) {
       node = TryFindNodeIn(i, size_in_bytes, node_size);
     }
+  }
+
+  if (!node.is_null()) {
+    Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+  }
+
+  DCHECK(IsVeryLong() || Available() == SumFreeLists());
+  return node;
+}
+
+
+// ------------------------------------------------
+// FreeListLegacyMoreSmallsSlowPath implementation
+
+FreeSpace FreeListLegacyMoreSmallsSlowPath::Allocate(size_t size_in_bytes, size_t* node_size, AllocationOrigin origin) {
+  USE(origin);
+  DCHECK_GE(kMaxBlockSize, size_in_bytes);
+  FreeSpace node;
+
+  // First, try the most precise category
+  FreeListCategoryType type = SelectFreeListCategoryType(size_in_bytes);
+  for (int i = type; i < last_category_ && node.is_null(); i++) {
+    node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                         node_size);
+  }
+
+  if (node.is_null()) {
+    // Next search the huge list for free list nodes. This takes linear time in
+    // the number of huge elements.
+    node = SearchForNodeInList(last_category_, size_in_bytes, node_size);
   }
 
   if (!node.is_null()) {
