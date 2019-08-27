@@ -833,6 +833,8 @@ DEFINE_INT(gc_freelist_strategy, 0,
            "3=FreeListManyFast.")
 DEFINE_BOOL(trace_mem_alloc, false,
             "print the size of each memory allocation")
+DEFINE_BOOL(trace_mem_alloc_large, false,
+            "print how many retry to allocate large object")
 
 DEFINE_INT(trace_allocation_stack_interval, -1,
            "print stack trace after <n> free-list allocations")

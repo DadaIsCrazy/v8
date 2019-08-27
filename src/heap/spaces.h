@@ -172,7 +172,12 @@ class FreeListCategory {
 
   // Picks a node of at least |minimum_size| from the category. Stores the
   // actual size in |node_size|. Returns nullptr if no node is found.
-  FreeSpace SearchForNodeInList(size_t minimum_size, size_t* node_size);
+  FreeSpace SearchForNodeInList(size_t minimum_size, size_t* node_size, int* count);
+  FreeSpace SearchForNodeInList(size_t minimum_size, size_t* node_size) {
+    int count = 0;
+    return SearchForNodeInList(minimum_size, node_size, &count);
+  }
+
 
   inline FreeList* owner();
   inline Page* page() const { return page_; }
@@ -358,7 +363,7 @@ class FreeList {
 
   // Searches a given |type| for a node of at least |minimum_size|.
   FreeSpace SearchForNodeInList(FreeListCategoryType type, size_t minimum_size,
-                                size_t* node_size);
+                                size_t* node_size, bool is_huge = false);
 
   // Returns the smallest category in which an object of |size_in_bytes| could
   // fit.

@@ -2944,11 +2944,13 @@ FreeSpace FreeListCategory::PickNodeFromList(size_t minimum_size,
 }
 
 FreeSpace FreeListCategory::SearchForNodeInList(size_t minimum_size,
-                                                size_t* node_size) {
+                                                size_t* node_size,
+                                                int* count) {
   DCHECK(page()->CanAllocate());
   FreeSpace prev_non_evac_node;
   for (FreeSpace cur_node = top(); !cur_node.is_null();
        cur_node = cur_node.next()) {
+    (*count)++;
     size_t size = cur_node.size();
     if (size >= minimum_size) {
       DCHECK_GE(available_, size);
@@ -3059,19 +3061,27 @@ FreeSpace FreeList::TryFindNodeIn(FreeListCategoryType type,
 
 FreeSpace FreeList::SearchForNodeInList(FreeListCategoryType type,
                                         size_t minimum_size,
-                                        size_t* node_size) {
+                                        size_t* node_size,
+                                        bool is_huge) {
   FreeListCategoryIterator it(this, type);
+  int count = 0;
   FreeSpace node;
   while (it.HasNext()) {
     FreeListCategory* current = it.Next();
-    node = current->SearchForNodeInList(minimum_size, node_size);
+    node = current->SearchForNodeInList(minimum_size, node_size, &count);
     if (!node.is_null()) {
       DCHECK(IsVeryLong() || Available() == SumFreeLists());
       if (current->is_empty()) {
         RemoveCategory(current);
       }
+      if (is_huge && FLAG_trace_mem_alloc_large) {
+        printf("Huge found: yes: %d (%zu -- %zu)\n", count, minimum_size, *node_size);
+      }
       return node;
     }
+  }
+  if (is_huge && FLAG_trace_mem_alloc_large) {
+    printf("Huge found: no: %d\n", count);
   }
   return node;
 }
@@ -3135,7 +3145,8 @@ FreeSpace FreeListLegacy::Allocate(size_t size_in_bytes, size_t* node_size, Allo
   if (node.is_null()) {
     // Next search the huge list for free list nodes. This takes linear time in
     // the number of huge elements.
-    node = SearchForNodeInList(kHuge, size_in_bytes, node_size);
+    node = SearchForNodeInList(kHuge, size_in_bytes, node_size,
+                               SelectFreeListCategoryType(size_in_bytes) == kHuge);
   }
 
   if (node.is_null() && type != kHuge) {
@@ -3462,7 +3473,7 @@ FreeSpace FreeListMany::Allocate(size_t size_in_bytes, size_t* node_size, Alloca
 
   if (node.is_null()) {
     // Searching each element of the last category.
-    node = SearchForNodeInList(last_category_, size_in_bytes, node_size);
+    node = SearchForNodeInList(last_category_, size_in_bytes, node_size, type == last_category_);
   }
 
   if (!node.is_null()) {
