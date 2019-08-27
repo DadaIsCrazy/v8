@@ -2285,8 +2285,58 @@ class V8_EXPORT_PRIVATE FreeListManyMoreData : public FreeList {
     return last_category_;
   }
 };
-
 using FreeListManyMore = FreeListPrecise<FreeListManyMoreData>;
+
+
+class V8_EXPORT_PRIVATE FreeListMany2kData : public FreeList {
+ protected:
+  static const size_t kMinBlockSize = 3 * kTaggedSize;
+
+  // This is a conservative upper bound. The actual maximum block size takes
+  // padding and alignment of data and code pages into account.
+  static const size_t kMaxBlockSize = Page::kPageSize;
+  // Largest size for which categories are still precise, and for which we can
+  // therefore compute the category in constant time.
+  static const size_t kTinyCategoryMaxSize = 256;
+  static const size_t kMediumCategoryMaxSize = 2048;
+  static const size_t kFirstMediumCategory = 29;
+  static const size_t kFirstLargeCategory = 36;
+  static const size_t kLastCategoryMin = 65536;
+
+  // Categories boundaries generated with:
+  // perl -E '
+  //  @cat = map {$_*8} 3..32;
+  //  while ($cat[-1] < 2048) {
+  //    push @cat, $cat[-1]+256;
+  //  }
+  //  while ($cat[-1] < 65536) {
+  //    push @cat, $cat[-1]+2048;
+  //  }
+  //  say join ", ", @cat;
+  //  say "\n", scalar @cat;'
+  static const int kNumberOfCategories = 68;
+  static constexpr unsigned int categories_min[kNumberOfCategories] = {
+    24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 512, 768, 1024, 1280, 1536, 1792, 2048, 4096, 6144, 8192, 10240, 12288, 14336, 16384, 18432, 20480, 22528, 24576, 26624, 28672, 30720, 32768, 34816, 36864, 38912, 40960, 43008, 45056, 47104, 49152, 51200, 53248, 55296, 57344, 59392, 61440, 63488, 65536};
+
+
+  // Return the smallest category that could hold |size_in_bytes| bytes.
+  FreeListCategoryType SelectFreeListCategoryType(
+      size_t size_in_bytes) override {
+    if (size_in_bytes < kTinyCategoryMaxSize) {
+      if (size_in_bytes < categories_min[1]) return 0;
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 3) - 3;
+    }
+    if (size_in_bytes < kMediumCategoryMaxSize) {
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 8) + kFirstMediumCategory-1;
+    }
+    if (size_in_bytes < kLastCategoryMin) {
+      return static_cast<FreeListCategoryType>(size_in_bytes >> 11) + kFirstLargeCategory-1;
+    }
+    return last_category_;
+  }
+};
+using FreeListManyMore2k = FreeListPrecise<FreeListManyMore2kData>;
+
 
 class V8_EXPORT_PRIVATE FreeListManyMore4kData : public FreeList {
  protected:
@@ -2657,6 +2707,7 @@ class V8_EXPORT_PRIVATE FreeListManyMoreCachedFastPath : public FreeListManyMore
 };
 
 using FreeListManyMoreFastPath = FreeListManyMoreCachedFastPath<FreeListCached<FreeListManyMore>,1024>;
+using FreeListManyMore2kFastPath = FreeListManyMoreCachedFastPath<FreeListCached<FreeListManyMore2k>,2048>;
 using FreeListManyMore4kFastPath = FreeListManyMoreCachedFastPath<FreeListCached<FreeListManyMore4k>,4096>;
 using FreeListManyMoreWholeRegionFastPath = FreeListManyMoreCachedFastPath<FreeListCached<FreeListManyMoreWholeRegion>,1024>;
 using FreeListManyMoreWholeRegion2kFastPath = FreeListManyMoreCachedFastPath<FreeListCached<FreeListManyMoreWholeRegion2k>,2048>;

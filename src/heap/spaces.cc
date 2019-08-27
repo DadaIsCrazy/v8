@@ -3035,6 +3035,8 @@ FreeList* FreeList::CreateFreeList() {
     case 24: return new FreeListManyMoreWholeRegion4kFastPath();
     case 25: return new FreeListManyMoreFastPathNoCache();
     case 26: return new FreeListLegacyMoreSmallsSlowPath();
+    case 27: return new FreeListManyMore2k();
+    case 28: return new FreeListManyMore2kFastPath();
     default:
       FATAL("Invalid FreeList strategy");
   }
