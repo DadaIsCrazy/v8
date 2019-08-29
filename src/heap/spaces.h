@@ -121,7 +121,7 @@ class Space;
 #define DCHECK_CODEOBJECT_SIZE(size, code_space) \
   DCHECK((0 < size) && (size <= code_space->AreaSize()))
 
-using FreeListCategoryType = int;
+using FreeListCategoryType = int32_t;
 
 static const FreeListCategoryType kFirstCategory = 0;
 static const FreeListCategoryType kInvalidCategory = -1;
@@ -139,12 +139,6 @@ enum RememberedSetType {
 // A free list category maintains a linked list of free memory blocks.
 class FreeListCategory {
  public:
-  FreeListCategory()
-      : type_(kInvalidCategory),
-        available_(0),
-        prev_(nullptr),
-        next_(nullptr) {}
-
   void Initialize(FreeListCategoryType type) {
     type_ = type;
     available_ = 0;
@@ -174,7 +168,7 @@ class FreeListCategory {
 
   inline bool is_linked(FreeList* owner);
   bool is_empty() { return top().is_null(); }
-  unsigned int available() const { return available_; }
+  uint32_t available() const { return available_; }
 
   size_t SumFreeList();
   int FreeListLength();
@@ -196,17 +190,17 @@ class FreeListCategory {
   void set_next(FreeListCategory* next) { next_ = next; }
 
   // |type_|: The type of this free list category.
-  FreeListCategoryType type_;
+  FreeListCategoryType type_ = kInvalidCategory;
 
   // |available_|: Total available bytes in all blocks of this free list
   // category.
-  unsigned int available_;
+  uint32_t available_ = 0;
 
   // |top_|: Points to the top FreeSpace in the free list category.
   FreeSpace top_;
 
-  FreeListCategory* prev_;
-  FreeListCategory* next_;
+  FreeListCategory* prev_ = nullptr;
+  FreeListCategory* next_ = nullptr;
 
   friend class FreeList;
   friend class FreeListManyCached;
