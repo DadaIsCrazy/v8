@@ -3046,6 +3046,10 @@ FreeList* FreeList::CreateFreeList() {
     case 35: return new FreeListManyCachedFastPath256();
     case 36: return new FreeListHalfSmallManyCachedFastPath256();
     case 37: return new FreeListHalfManyCachedFastPath256();
+    case 38: return new FreeListManyFastPath();
+    case 39: return new FreeListHalfManyFastPath();
+    case 40: return new FreeListManyOrigin();
+    case 41: return new FreeListManyMore2kFastPathNoCache();
     default:
       FATAL("Invalid FreeList strategy");
   }
@@ -3632,6 +3636,58 @@ FreeSpace FreeListManyCachedFastPath::Allocate(size_t size_in_bytes,
 }
 
 // ------------------------------------------------
+// FreeListManyFastPath implementation
+
+FreeSpace FreeListManyFastPath::Allocate(size_t size_in_bytes,
+                                         size_t* node_size,
+                                         AllocationOrigin origin) {
+  USE(origin);
+  DCHECK_GE(kMaxBlockSize, size_in_bytes);
+  FreeSpace node;
+
+  // Fast path part 1: searching the last categories
+  FreeListCategoryType first_category =
+      SelectFastAllocationFreeListCategoryType(size_in_bytes);
+  FreeListCategoryType type = first_category;
+  for (; type <= last_category_; type++) {
+    node = TryFindNodeIn(type, size_in_bytes, node_size);
+    if (!node.is_null()) break;
+  }
+
+  // Fast path part 2: searching the medium categories for tiny objects
+  if (node.is_null()) {
+    if (size_in_bytes <= kTinyObjectMaxSize) {
+      for (type = kFastPathFallBackTiny; type < kFastPathFirstCategory; type++) {
+        node = TryFindNodeIn(type, size_in_bytes, node_size);
+        if (!node.is_null()) break;
+      }
+    }
+  }
+
+  // Searching the last category
+  if (node.is_null()) {
+    // Searching each element of the last category.
+    node = SearchForNodeInList(last_category_, size_in_bytes, node_size);
+  }
+
+  // Finally, search the most precise category
+  if (node.is_null()) {
+    type = SelectFreeListCategoryType(size_in_bytes);
+    for (; type < first_category; type++) {
+      node = TryFindNodeIn(type, size_in_bytes, node_size);
+      if (!node.is_null()) break;
+    }
+  }
+
+  if (!node.is_null()) {
+    Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+  }
+
+  DCHECK(IsVeryLong() || Available() == SumFreeLists());
+  return node;
+}
+
+// ------------------------------------------------
 // FreeListManyCachedFastPath256 implementation
 
 FreeSpace FreeListManyCachedFastPath256::Allocate(size_t size_in_bytes,
@@ -3873,6 +3929,59 @@ FreeSpace FreeListHalfManyCachedFastPath::Allocate(size_t size_in_bytes,
 }
 
 // ------------------------------------------------
+// FreeListManyFastPath implementation
+
+FreeSpace FreeListHalfManyFastPath::Allocate(size_t size_in_bytes,
+                                             size_t* node_size,
+                                             AllocationOrigin origin) {
+  USE(origin);
+  DCHECK_GE(kMaxBlockSize, size_in_bytes);
+  FreeSpace node;
+
+  // Fast path part 1: searching the last categories
+  FreeListCategoryType first_category =
+      SelectFastAllocationFreeListCategoryType(size_in_bytes);
+  FreeListCategoryType type = first_category;
+  for (; type <= last_category_; type++) {
+    node = TryFindNodeIn(type, size_in_bytes, node_size);
+    if (!node.is_null()) break;
+  }
+
+  // Fast path part 2: searching the medium categories for tiny objects
+  if (node.is_null()) {
+    if (size_in_bytes <= kTinyObjectMaxSize) {
+      for (type = kFastPathFallBackTiny; type < kFastPathFirstCategory; type++) {
+        node = TryFindNodeIn(type, size_in_bytes, node_size);
+        if (!node.is_null()) break;
+      }
+    }
+  }
+
+  // Searching the last category
+  if (node.is_null()) {
+    // Searching each element of the last category.
+    node = SearchForNodeInList(last_category_, size_in_bytes, node_size);
+  }
+
+  // Finally, search the most precise category
+  if (node.is_null()) {
+    type = SelectFreeListCategoryType(size_in_bytes);
+    for (; type < first_category; type++) {
+      node = TryFindNodeIn(type, size_in_bytes, node_size);
+      if (!node.is_null()) break;
+    }
+  }
+
+  if (!node.is_null()) {
+    Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+  }
+
+  DCHECK(IsVeryLong() || Available() == SumFreeLists());
+  return node;
+}
+
+
+// ------------------------------------------------
 // FreeListHalfManyCachedFastPath256 implementation
 
 FreeSpace FreeListHalfManyCachedFastPath256::Allocate(size_t size_in_bytes,
@@ -3939,6 +4048,21 @@ FreeSpace FreeListManyCachedOrigin::Allocate(size_t size_in_bytes,
                                                 origin);
   }
 }
+
+// ------------------------------------------------
+// FreeListManyOrigin implementation
+
+FreeSpace FreeListManyOrigin::Allocate(size_t size_in_bytes,
+                                             size_t* node_size,
+                                             AllocationOrigin origin) {
+  if (origin == AllocationOrigin::kGC) {
+    return FreeListMany::Allocate(size_in_bytes, node_size, origin);
+  } else {
+    return FreeListManyFastPath::Allocate(size_in_bytes, node_size,
+                                          origin);
+  }
+}
+
 
 // ------------------------------------------------
 // FreeListManyMoreCachedFastPath implementation
@@ -4011,6 +4135,60 @@ FreeSpace FreeListManyMoreCachedFastPath<FreeListManyMoreBase,FastPathStart>::Al
 // FreeListManyMoreFastPathNoCache implementation
 
 FreeSpace FreeListManyMoreFastPathNoCache::Allocate(size_t size_in_bytes,
+                                                    size_t* node_size,
+                                                    AllocationOrigin origin) {
+  USE(origin);
+  DCHECK_GE(kMaxBlockSize, size_in_bytes);
+  FreeSpace node;
+
+  // Fast path part 1: searching the last categories
+  FreeListCategoryType first_category =
+      SelectFastAllocationFreeListCategoryType(size_in_bytes);
+  FreeListCategoryType type = first_category;
+  for (; type <= last_category_; type++) {
+    node = TryFindNodeIn(type, size_in_bytes, node_size);
+    if (!node.is_null()) break;
+  }
+
+  // Fast path part 2: searching the medium categories for tiny objects
+  if (node.is_null()) {
+    if (size_in_bytes <= kTinyObjectMaxSize) {
+      for (type = kFastPathFallBackTiny; type < kFastPathFirstCategory; type++) {
+        node = TryFindNodeIn(type, size_in_bytes, node_size);
+        if (!node.is_null()) break;
+      }
+    }
+  }
+
+  // Searching the last category
+  if (node.is_null()) {
+    // Searching each element of the last category.
+    type = last_category_;
+    node = SearchForNodeInList(type, size_in_bytes, node_size);
+  }
+
+  // Finally, search the most precise category
+  if (node.is_null()) {
+    type = SelectFreeListCategoryType(size_in_bytes);
+    for (; type < first_category; type++) {
+      node = TryFindNodeIn(type, size_in_bytes, node_size);
+      if (!node.is_null()) break;
+    }
+  }
+
+  if (!node.is_null()) {
+    Page::FromHeapObject(node)->IncreaseAllocatedBytes(*node_size);
+  }
+
+  DCHECK(IsVeryLong() || Available() == SumFreeLists());
+  return node;
+}
+
+
+// ------------------------------------------------
+// FreeListManyMore2kFastPathNoCache implementation
+
+FreeSpace FreeListManyMore2kFastPathNoCache::Allocate(size_t size_in_bytes,
                                                     size_t* node_size,
                                                     AllocationOrigin origin) {
   USE(origin);

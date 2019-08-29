@@ -2816,6 +2816,22 @@ class V8_EXPORT_PRIVATE FreeListCached : public FreeListBase {
 // FreeListManyCachedOrigin, which is precise for the scavenger.
 class V8_EXPORT_PRIVATE FreeListManyCachedFastPath : public FreeListCached<FreeListMany> {
  public:
+  Page* GetPageForSize(size_t size_in_bytes) override {
+    FreeListCategoryType minimum_category =
+        SelectFastAllocationFreeListCategoryType(size_in_bytes);
+    Page* page = nullptr;
+    for (int cat = minimum_category; !page && cat <= last_category_; cat++) {
+      page = GetPageForCategoryType(cat);
+    }
+    if (!page) {
+      FreeListCategoryType real_minimum_category = SelectFreeListCategoryType(size_in_bytes);
+      for (int cat = minimum_category-1; !page && cat > real_minimum_category; cat--) {
+        page = GetPageForCategoryType(minimum_category);
+      }
+    }
+    return page;
+  }
+
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                            size_t* node_size,
                                            AllocationOrigin origin) override;
@@ -2852,9 +2868,75 @@ class V8_EXPORT_PRIVATE FreeListManyCachedFastPath : public FreeListCached<FreeL
       SpacesTest,
       FreeListManyCachedFastPathSelectFastAllocationFreeListCategoryType);
 };
+class V8_EXPORT_PRIVATE FreeListManyFastPath : public FreeListMany {
+ public:
+  Page* GetPageForSize(size_t size_in_bytes) override {
+    FreeListCategoryType minimum_category =
+        SelectFastAllocationFreeListCategoryType(size_in_bytes);
+    Page* page = nullptr;
+    for (int cat = minimum_category; !page && cat <= last_category_; cat++) {
+      page = GetPageForCategoryType(cat);
+    }
+    if (!page) {
+      FreeListCategoryType real_minimum_category = SelectFreeListCategoryType(size_in_bytes);
+      for (int cat = minimum_category-1; !page && cat > real_minimum_category; cat--) {
+        page = GetPageForCategoryType(minimum_category);
+      }
+    }
+    return page;
+  }
+
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size,
+                                           AllocationOrigin origin) override;
+
+ protected:
+  // Objects in the 36th category are at least 2048 bytes
+  static const FreeListCategoryType kFastPathFirstCategory = 35;
+  static const size_t kFastPathStart = 2048;
+  static const size_t kTinyObjectMaxSize = 128;
+  static const size_t kFastPathOffset = kFastPathStart - kTinyObjectMaxSize;
+  // Objects in the 30th category are at least 256 bytes
+  static const FreeListCategoryType kFastPathFallBackTiny = 29;
+
+  STATIC_ASSERT(categories_min[kFastPathFirstCategory] == kFastPathStart);
+  STATIC_ASSERT(categories_min[kFastPathFallBackTiny] ==
+                kTinyObjectMaxSize * 2);
+
+  FreeListCategoryType SelectFastAllocationFreeListCategoryType(
+      size_t size_in_bytes) {
+    DCHECK(size_in_bytes < kMaxBlockSize);
+
+    if (size_in_bytes >= categories_min[last_category_]) return last_category_;
+
+    size_in_bytes += kFastPathOffset;
+    for (int cat = kFastPathFirstCategory; cat < last_category_; cat++) {
+      if (size_in_bytes <= categories_min[cat]) {
+        return cat;
+      }
+    }
+    return last_category_;
+  }
+};
 
 class V8_EXPORT_PRIVATE FreeListManyCachedFastPath256 : public FreeListCached<FreeListMany> {
  public:
+  Page* GetPageForSize(size_t size_in_bytes) override {
+    FreeListCategoryType minimum_category =
+        SelectFastAllocationFreeListCategoryType(size_in_bytes);
+    Page* page = nullptr;
+    for (int cat = minimum_category; !page && cat <= last_category_; cat++) {
+      page = GetPageForCategoryType(cat);
+    }
+    if (!page) {
+      FreeListCategoryType real_minimum_category = SelectFreeListCategoryType(size_in_bytes);
+      for (int cat = minimum_category-1; !page && cat > real_minimum_category; cat--) {
+        page = GetPageForCategoryType(minimum_category);
+      }
+    }
+    return page;
+  }
+
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                            size_t* node_size,
                                            AllocationOrigin origin) override;
@@ -2890,6 +2972,22 @@ class V8_EXPORT_PRIVATE FreeListManyCachedFastPath256 : public FreeListCached<Fr
 
 class V8_EXPORT_PRIVATE FreeListHalfSmallManyCachedFastPath : public FreeListCached<FreeListHalfSmallMany> {
  public:
+  Page* GetPageForSize(size_t size_in_bytes) override {
+    FreeListCategoryType minimum_category =
+        SelectFastAllocationFreeListCategoryType(size_in_bytes);
+    Page* page = nullptr;
+    for (int cat = minimum_category; !page && cat <= last_category_; cat++) {
+      page = GetPageForCategoryType(cat);
+    }
+    if (!page) {
+      FreeListCategoryType real_minimum_category = SelectFreeListCategoryType(size_in_bytes);
+      for (int cat = minimum_category-1; !page && cat > real_minimum_category; cat--) {
+        page = GetPageForCategoryType(minimum_category);
+      }
+    }
+    return page;
+  }
+
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                            size_t* node_size,
                                            AllocationOrigin origin) override;
@@ -2925,7 +3023,23 @@ class V8_EXPORT_PRIVATE FreeListHalfSmallManyCachedFastPath : public FreeListCac
 
 
 class V8_EXPORT_PRIVATE FreeListHalfSmallManyCachedFastPath256 : public FreeListCached<FreeListHalfSmallMany> {
- public:
+public:
+  Page* GetPageForSize(size_t size_in_bytes) override {
+    FreeListCategoryType minimum_category =
+        SelectFastAllocationFreeListCategoryType(size_in_bytes);
+    Page* page = nullptr;
+    for (int cat = minimum_category; !page && cat <= last_category_; cat++) {
+      page = GetPageForCategoryType(cat);
+    }
+    if (!page) {
+      FreeListCategoryType real_minimum_category = SelectFreeListCategoryType(size_in_bytes);
+      for (int cat = minimum_category-1; !page && cat > real_minimum_category; cat--) {
+        page = GetPageForCategoryType(minimum_category);
+      }
+    }
+    return page;
+  }
+
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                            size_t* node_size,
                                            AllocationOrigin origin) override;
@@ -2956,6 +3070,73 @@ class V8_EXPORT_PRIVATE FreeListHalfSmallManyCachedFastPath256 : public FreeList
 
 class V8_EXPORT_PRIVATE FreeListHalfManyCachedFastPath : public FreeListCached<FreeListHalfMany> {
  public:
+  Page* GetPageForSize(size_t size_in_bytes) override {
+    FreeListCategoryType minimum_category =
+        SelectFastAllocationFreeListCategoryType(size_in_bytes);
+    Page* page = nullptr;
+    for (int cat = minimum_category; !page && cat <= last_category_; cat++) {
+      page = GetPageForCategoryType(cat);
+    }
+    if (!page) {
+      FreeListCategoryType real_minimum_category = SelectFreeListCategoryType(size_in_bytes);
+      for (int cat = minimum_category-1; !page && cat > real_minimum_category; cat--) {
+        page = GetPageForCategoryType(minimum_category);
+      }
+    }
+    return page;
+  }
+
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size,
+                                           AllocationOrigin origin) override;
+
+ protected:
+  // Objects in the 36th category are at least 2048 bytes
+  static const FreeListCategoryType kFastPathFirstCategory = 18;
+  static const size_t kFastPathStart = 2048;
+  static const size_t kTinyObjectMaxSize = 128;
+  static const size_t kFastPathOffset = kFastPathStart - kTinyObjectMaxSize;
+  // Objects in the 30th category are at least 256 bytes
+  static const FreeListCategoryType kFastPathFallBackTiny = 15;
+
+  STATIC_ASSERT(categories_min[kFastPathFirstCategory] == kFastPathStart);
+  STATIC_ASSERT(categories_min[kFastPathFallBackTiny] ==
+                kTinyObjectMaxSize * 2);
+
+  FreeListCategoryType SelectFastAllocationFreeListCategoryType(
+      size_t size_in_bytes) {
+    DCHECK(size_in_bytes < kMaxBlockSize);
+
+    if (size_in_bytes >= categories_min[last_category_]) return last_category_;
+
+    size_in_bytes += kFastPathOffset;
+    for (int cat = kFastPathFirstCategory; cat < last_category_; cat++) {
+      if (size_in_bytes <= categories_min[cat]) {
+        return cat;
+      }
+    }
+    return last_category_;
+  }
+};
+
+class V8_EXPORT_PRIVATE FreeListHalfManyFastPath : public FreeListHalfMany {
+ public:
+    Page* GetPageForSize(size_t size_in_bytes) override {
+    FreeListCategoryType minimum_category =
+        SelectFastAllocationFreeListCategoryType(size_in_bytes);
+    Page* page = nullptr;
+    for (int cat = minimum_category; !page && cat <= last_category_; cat++) {
+      page = GetPageForCategoryType(cat);
+    }
+    if (!page) {
+      FreeListCategoryType real_minimum_category = SelectFreeListCategoryType(size_in_bytes);
+      for (int cat = minimum_category-1; !page && cat > real_minimum_category; cat--) {
+        page = GetPageForCategoryType(minimum_category);
+      }
+    }
+    return page;
+  }
+
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                            size_t* node_size,
                                            AllocationOrigin origin) override;
@@ -2991,6 +3172,22 @@ class V8_EXPORT_PRIVATE FreeListHalfManyCachedFastPath : public FreeListCached<F
 
 class V8_EXPORT_PRIVATE FreeListHalfManyCachedFastPath256 : public FreeListCached<FreeListHalfMany> {
  public:
+  Page* GetPageForSize(size_t size_in_bytes) override {
+    FreeListCategoryType minimum_category =
+        SelectFastAllocationFreeListCategoryType(size_in_bytes);
+    Page* page = nullptr;
+    for (int cat = minimum_category; !page && cat <= last_category_; cat++) {
+      page = GetPageForCategoryType(cat);
+    }
+    if (!page) {
+      FreeListCategoryType real_minimum_category = SelectFreeListCategoryType(size_in_bytes);
+      for (int cat = minimum_category-1; !page && cat > real_minimum_category; cat--) {
+        page = GetPageForCategoryType(minimum_category);
+      }
+    }
+    return page;
+  }
+
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                            size_t* node_size,
                                            AllocationOrigin origin) override;
@@ -3023,6 +3220,22 @@ class V8_EXPORT_PRIVATE FreeListHalfManyCachedFastPath256 : public FreeListCache
 template <class FreeListManyMoreBase, int FastPathStart>
 class V8_EXPORT_PRIVATE FreeListManyMoreCachedFastPath : public FreeListManyMoreBase {
  public:
+  Page* GetPageForSize(size_t size_in_bytes) override {
+    FreeListCategoryType minimum_category =
+        SelectFastAllocationFreeListCategoryType(size_in_bytes);
+    Page* page = nullptr;
+    for (int cat = minimum_category; !page && cat <= FreeListManyMoreBase::last_category_; cat++) {
+      page = FreeListManyMoreBase::GetPageForCategoryType(cat);
+    }
+    if (!page) {
+      FreeListCategoryType real_minimum_category = FreeListManyMoreBase::SelectFreeListCategoryType(size_in_bytes);
+      for (int cat = minimum_category-1; !page && cat > real_minimum_category; cat--) {
+        page = FreeListManyMoreBase::GetPageForCategoryType(minimum_category);
+      }
+    }
+    return page;
+  }
+
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                            size_t* node_size,
                                            AllocationOrigin origin) override;
@@ -3065,6 +3278,22 @@ using FreeListManyMoreWholeRegion4kFastPath = FreeListManyMoreCachedFastPath<Fre
 
 class FreeListManyMoreFastPathNoCache : public FreeListManyMore {
  public:
+    Page* GetPageForSize(size_t size_in_bytes) override {
+    FreeListCategoryType minimum_category =
+        SelectFastAllocationFreeListCategoryType(size_in_bytes);
+    Page* page = nullptr;
+    for (int cat = minimum_category; !page && cat <= last_category_; cat++) {
+      page = GetPageForCategoryType(cat);
+    }
+    if (!page) {
+      FreeListCategoryType real_minimum_category = SelectFreeListCategoryType(size_in_bytes);
+      for (int cat = minimum_category-1; !page && cat > real_minimum_category; cat--) {
+        page = GetPageForCategoryType(minimum_category);
+      }
+    }
+    return page;
+  }
+
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                            size_t* node_size,
                                            AllocationOrigin origin) override;
@@ -3098,6 +3327,57 @@ class FreeListManyMoreFastPathNoCache : public FreeListManyMore {
   }
 };
 
+class FreeListManyMore2kFastPathNoCache : public FreeListManyMore2k {
+ public:
+  Page* GetPageForSize(size_t size_in_bytes) override {
+    FreeListCategoryType minimum_category =
+        SelectFastAllocationFreeListCategoryType(size_in_bytes);
+    Page* page = nullptr;
+    for (int cat = minimum_category; !page && cat <= last_category_; cat++) {
+      page = GetPageForCategoryType(cat);
+    }
+    if (!page) {
+      FreeListCategoryType real_minimum_category = SelectFreeListCategoryType(size_in_bytes);
+      for (int cat = minimum_category-1; !page && cat > real_minimum_category; cat--) {
+        page = GetPageForCategoryType(minimum_category);
+      }
+    }
+    return page;
+  }
+
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size,
+                                           AllocationOrigin origin) override;
+
+ protected:
+  // Objects in the 36th category are at least 2048 bytes
+  static const FreeListCategoryType kFastPathFirstCategory = 36;
+  static const size_t kFastPathStart = 2048;
+  static const size_t kTinyObjectMaxSize = 128;
+  // Objects in the 30th category are at least 256 bytes
+  static const FreeListCategoryType kFastPathFallBackTiny = 29;
+
+  STATIC_ASSERT(categories_min[kFastPathFirstCategory] == kFastPathStart);
+  STATIC_ASSERT(categories_min[kFastPathFallBackTiny] ==
+                kTinyObjectMaxSize * 2);
+
+  FreeListCategoryType SelectFastAllocationFreeListCategoryType(
+      size_t size_in_bytes) {
+    DCHECK(size_in_bytes < kMaxBlockSize);
+
+    if (size_in_bytes >= categories_min[last_category_])
+      return last_category_;
+
+    if (size_in_bytes <= kTinyObjectMaxSize) return kFastPathFirstCategory;
+
+    size_in_bytes += kFastPathStart;
+
+    FreeListCategoryType cat = SelectFreeListCategoryType(size_in_bytes);
+
+    return cat < last_category_ ? cat + 1 : cat;
+  }
+};
+
 
 // Uses FreeListManyCached if in the GC; FreeListManyCachedFastPath otherwise.
 // The reasonning behind this FreeList is the following: the GC runs in
@@ -3107,13 +3387,29 @@ class FreeListManyMoreFastPathNoCache : public FreeListManyMore {
 // efficient, but reduces fragmentation (FreeListManyCached), while the strategy
 // for the later is one that is very efficient, but introduces some
 // fragmentation (FreeListManyCachedFastPath).
-class V8_EXPORT_PRIVATE FreeListManyCachedOrigin
+class V8_EXPORT_PRIVATE FreeListManyCachedOrigin final
     : public FreeListManyCachedFastPath {
  public:
+  Page* GetPageForSize(size_t size_in_bytes) override {
+    return FreeListMany::GetPageForSize(size_in_bytes);
+  }
+
   V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
                                            size_t* node_size,
                                            AllocationOrigin origin) override;
 };
+class V8_EXPORT_PRIVATE FreeListManyOrigin final
+    : public FreeListManyFastPath {
+public:
+
+  Page* GetPageForSize(size_t size_in_bytes) override {
+    return FreeListMany::GetPageForSize(size_in_bytes);
+  }
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size,
+                                           AllocationOrigin origin) override;
+};
+
 
 // FreeList for maps: since maps are all the same size, uses a single freelist.
 class V8_EXPORT_PRIVATE FreeListMap : public FreeList {
