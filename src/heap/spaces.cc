@@ -1982,7 +1982,6 @@ void PagedSpace::ReleasePage(Page* page) {
   DCHECK_EQ(page->owner(), this);
 
   free_list_->EvictFreeListItems(page);
-  DCHECK(!free_list_->ContainsPageFreeListItems(page));
 
   if (Page::FromAllocationAreaAddress(allocation_info_.top()) == page) {
     DCHECK(!top_on_previous_step_);
@@ -3543,19 +3542,6 @@ size_t FreeList::EvictFreeListItems(Page* page) {
     category->Reset(this);
   });
   return sum;
-}
-
-bool FreeList::ContainsPageFreeListItems(Page* page) {
-  bool contained = false;
-  page->ForAllFreeListCategories(
-      [this, &contained](FreeListCategory* category) {
-        if (!category->top().is_null() &&
-            Page::FromHeapObject(category->top())->free_list() == this &&
-            category->is_linked(this)) {
-          contained = true;
-        }
-      });
-  return contained;
 }
 
 void FreeList::RepairLists(Heap* heap) {
