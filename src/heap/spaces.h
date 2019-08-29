@@ -174,7 +174,7 @@ class FreeListCategory {
 
   inline bool is_linked(FreeList* owner);
   bool is_empty() { return top().is_null(); }
-  size_t available() const { return available_; }
+  unsigned int available() const { return available_; }
 
   size_t SumFreeList();
   int FreeListLength();
@@ -200,7 +200,7 @@ class FreeListCategory {
 
   // |available_|: Total available bytes in all blocks of this free list
   // category.
-  size_t available_;
+  unsigned int available_;
 
   // |top_|: Points to the top FreeSpace in the free list category.
   FreeSpace top_;
