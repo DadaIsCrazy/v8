@@ -516,7 +516,7 @@ void Sweeper::PrepareToBeSweptPage(AllocationSpace space, Page* page) {
   page->ForAllFreeListCategories([page](FreeListCategory* category) {
     DCHECK(!category->is_linked(page->owner()->free_list()));
   });
-#endif
+#endif  // DEBUG
   page->set_concurrent_sweeping_state(Page::kSweepingPending);
   heap_->paged_space(space)->IncreaseAllocatedBytes(
       marking_state_->live_bytes(page), page);

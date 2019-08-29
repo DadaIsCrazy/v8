@@ -166,7 +166,7 @@ class FreeListCategory {
   // actual size in |node_size|. Returns nullptr if no node is found.
   FreeSpace SearchForNodeInList(size_t minimum_size, size_t* node_size);
 
-  inline bool is_linked(FreeList* owner);
+  inline bool is_linked(FreeList* owner) const;
   bool is_empty() { return top().is_null(); }
   uint32_t available() const { return available_; }
 
