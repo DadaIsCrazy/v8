@@ -312,7 +312,7 @@ MemoryChunk* OldGenerationMemoryChunkIterator::next() {
   UNREACHABLE();
 }
 
-bool FreeListCategory::is_linked(FreeList* owner) {
+bool FreeListCategory::is_linked(FreeList* owner) const {
   return prev_ != nullptr || next_ != nullptr ||
          owner->categories_[type_] == this;
 }
