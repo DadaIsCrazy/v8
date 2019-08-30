@@ -2046,6 +2046,25 @@ class V8_EXPORT_PRIVATE FreeListLegacyMoreSmalls : public FreeList {
 };
 
 
+class V8_EXPORT_PRIVATE FreeListLegacySlowPath : public FreeListLegacy {
+
+  Page* GetPageForSize(size_t size_in_bytes) override {
+    const int minimum_category =
+        static_cast<int>(SelectFreeListCategoryType(size_in_bytes));
+
+    Page* page = GetPageForCategoryType(minimum_category);
+    for (int i = minimum_category+1; i <= last_category_ && !page; i++) {
+      page = GetPageForCategoryType(i);
+    }
+    return page;
+  }
+
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size, AllocationOrigin origin) override;
+
+};
+
+
 class V8_EXPORT_PRIVATE FreeListLegacyMoreSmallsSlowPath : public FreeListLegacyMoreSmalls {
 
   Page* GetPageForSize(size_t size_in_bytes) override {
@@ -2918,6 +2937,14 @@ class V8_EXPORT_PRIVATE FreeListManyFastPath : public FreeListMany {
     return last_category_;
   }
 };
+
+class V8_EXPORT_PRIVATE FreeListManyFastPathNoFallBackFast : public FreeListManyFastPath {
+
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size,
+                                           AllocationOrigin origin) override;
+};
+
 
 class V8_EXPORT_PRIVATE FreeListManyCachedFastPath256 : public FreeListCached<FreeListMany> {
  public:
